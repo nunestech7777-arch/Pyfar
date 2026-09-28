@@ -44,13 +44,13 @@ const MainCard: React.FC<{
   return (
     <button
       onClick={onClick}
-      className="bg-white p-5 rounded-3xl border border-slate-100 shadow-card text-left hover:border-blue-300 hover:shadow-md transition-all group"
+      className="@container min-w-0 bg-white p-4 xl:p-5 rounded-3xl border border-slate-100 shadow-card text-left hover:border-blue-300 hover:shadow-md transition-all group"
     >
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-bold uppercase text-slate-400">{label}</span>
         <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
       </div>
-      <div className={`text-2xl sm:text-3xl font-black mt-1.5 ${toneMap[tone]}`}>{value}</div>
+      <div className={`text-[clamp(1rem,11.5cqw,1.875rem)] leading-tight whitespace-nowrap tabular-nums font-black mt-1.5 ${toneMap[tone]}`}>{value}</div>
       {compare && <div className="mt-1.5">{compare}</div>}
     </button>
   );

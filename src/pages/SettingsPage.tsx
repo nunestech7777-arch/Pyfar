@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { toLocalISODate } from '../utils/financeRules';
 import { 
   Settings, 
   User, 
@@ -52,7 +53,7 @@ export const SettingsPage: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const downloadAnchor = document.createElement('a');
     downloadAnchor.href = url;
-    downloadAnchor.download = `pyfar_backup_${new Date().toISOString().split('T')[0]}.json`;
+    downloadAnchor.download = `pyfar_backup_${toLocalISODate()}.json`;
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();

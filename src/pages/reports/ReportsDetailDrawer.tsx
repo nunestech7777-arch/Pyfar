@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import {
-  formatCurrency, formatDate, getPaymentStatusBadge, getPaymentMethodLabel,
+  formatCurrency, formatDate, getSaleStatusBadge, getPaymentMethodLabel,
 } from '../../utils/formatters';
 import { Sale, Client } from '../../types';
 import { ProductSummary, LotSummary } from './reportsData';
@@ -79,9 +79,20 @@ export const ReportsDetailDrawer: React.FC<ReportsDetailDrawerProps> = ({
   // ---------------------------------------------------------------
   // Renderiza uma linha de venda simples (reutilizada pelas listas de overview)
   // ---------------------------------------------------------------
-  const SaleRow: React.FC<{ sale: Sale; highlight?: 'paid' | 'remaining' }> = ({ sale, highlight }) => {
-    const badge = getPaymentStatusBadge(sale.status);
+  type RowMetric = 'total' | 'paid' | 'remaining' | 'cost' | 'profit';
+
+  const SaleRow: React.FC<{ sale: Sale; metric?: RowMetric }> = ({ sale, metric = 'total' }) => {
+    const badge = getSaleStatusBadge(sale);
     const productLabel = Array.from(new Set(sale.items.map(i => i.vaccineName))).join(' + ');
+    const margin = sale.totalAmount > 0 ? (sale.grossProfit / sale.totalAmount) * 100 : 0;
+    const view: Record<RowMetric, { label: string; value: number; tone: string; sub?: string }> = {
+      total: { label: 'Valor da venda', value: sale.totalAmount, tone: 'text-slate-900' },
+      paid: { label: 'Recebido', value: sale.paidAmount, tone: 'text-emerald-600', sub: `de ${formatCurrency(sale.totalAmount)}` },
+      remaining: { label: 'Falta receber', value: sale.remainingBalance, tone: 'text-rose-600', sub: `de ${formatCurrency(sale.totalAmount)}` },
+      cost: { label: 'Custo dos produtos', value: sale.totalCost, tone: 'text-rose-600', sub: `venda de ${formatCurrency(sale.totalAmount)}` },
+      profit: { label: 'Lucro', value: sale.grossProfit, tone: 'text-blue-700', sub: `${margin.toFixed(1)}% da venda` },
+    };
+    const v = view[metric];
     return (
       <div
         onClick={() => openSale(sale)}
@@ -101,16 +112,29 @@ export const ReportsDetailDrawer: React.FC<ReportsDetailDrawerProps> = ({
         </div>
         <div className="flex items-center justify-between sm:justify-end gap-4 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100">
           <div className="text-right">
-            <div className="text-xs text-slate-400 font-medium">Valor</div>
-            <div className={`text-sm font-black ${highlight === 'remaining' ? 'text-rose-600' : highlight === 'paid' ? 'text-emerald-600' : 'text-slate-900'}`}>
-              {highlight === 'paid' ? formatCurrency(sale.paidAmount) : highlight === 'remaining' ? formatCurrency(sale.remainingBalance) : formatCurrency(sale.totalAmount)}
-            </div>
+            <div className="text-xs text-slate-400 font-medium">{v.label}</div>
+            <div className={`text-sm font-black ${v.tone}`}>{formatCurrency(v.value)}</div>
+            {v.sub && <div className="text-[10px] text-slate-400">{v.sub}</div>}
           </div>
           <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
         </div>
       </div>
     );
   };
+
+  // Cada card da Visão Geral abre a mesma lista de vendas do período, mas mostrando o número
+  // daquele card em cada venda. O total no topo é a soma da lista e bate com o card.
+  const OVERVIEWS: Partial<Record<ReportsDrawerType, { metric: RowMetric; explain: string; filter: (s: Sale) => boolean; empty: string }>> = {
+    sales_overview: { metric: 'total', explain: 'Soma do valor de todas as vendas do período (canceladas não entram).', filter: () => true, empty: 'Nenhuma venda no período selecionado.' },
+    received_overview: { metric: 'paid', explain: 'Quanto das vendas do período já foi pago pelos clientes até hoje.', filter: s => s.paidAmount > 0, empty: 'Nenhum valor recebido no período.' },
+    receivable_overview: { metric: 'remaining', explain: 'Quanto das vendas do período os clientes ainda devem.', filter: s => s.remainingBalance > 0, empty: 'Nada a receber no período.' },
+    cost_overview: { metric: 'cost', explain: 'Quanto você pagou pelos produtos que foram vendidos no período, pelo custo do lote na hora da venda. Não é compra de estoque: produto parado no estoque não entra aqui.', filter: () => true, empty: 'Nenhuma venda no período selecionado.' },
+    profit_overview: { metric: 'profit', explain: 'Valor da venda menos o custo dos produtos vendidos. É o lucro da venda, não o dinheiro que já entrou no caixa.', filter: () => true, empty: 'Nenhuma venda no período selecionado.' },
+  };
+
+  const overviewTotal = (metric: RowMetric, list: Sale[]) => list.reduce((acc, s) => acc + (
+    metric === 'paid' ? s.paidAmount : metric === 'remaining' ? s.remainingBalance : metric === 'cost' ? s.totalCost : metric === 'profit' ? s.grossProfit : s.totalAmount
+  ), 0);
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden animate-in fade-in duration-200 no-print">
@@ -143,50 +167,31 @@ export const ReportsDetailDrawer: React.FC<ReportsDetailDrawerProps> = ({
           {/* Body */}
           <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-slate-50/50">
 
-            {/* Vendas / Custo / Lucro overview: mesma lista, colunas diferentes de destaque */}
-            {(current.type === 'sales_overview' || current.type === 'cost_overview' || current.type === 'profit_overview') && (
-              <>
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente ou venda..."
-                    className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" />
-                </div>
-                <div className="space-y-2.5">
-                  {filteredSales.filter(matchesSearch).map(sale => <SaleRow key={sale.id} sale={sale} />)}
-                  {filteredSales.length === 0 && <EmptyState text="Nenhuma venda no período selecionado." />}
-                </div>
-              </>
-            )}
-
-            {/* Recebido */}
-            {current.type === 'received_overview' && (
-              <>
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente ou venda..."
-                    className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" />
-                </div>
-                <div className="space-y-2.5">
-                  {filteredSales.filter(s => s.paidAmount > 0).filter(matchesSearch).map(sale => <SaleRow key={sale.id} sale={sale} highlight="paid" />)}
-                  {filteredSales.filter(s => s.paidAmount > 0).length === 0 && <EmptyState text="Nenhum valor recebido no período." />}
-                </div>
-              </>
-            )}
-
-            {/* A Receber */}
-            {current.type === 'receivable_overview' && (
-              <>
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente ou venda..."
-                    className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" />
-                </div>
-                <div className="space-y-2.5">
-                  {filteredSales.filter(s => s.remainingBalance > 0).filter(matchesSearch).map(sale => <SaleRow key={sale.id} sale={sale} highlight="remaining" />)}
-                  {filteredSales.filter(s => s.remainingBalance > 0).length === 0 && <EmptyState text="Nada a receber no período." good />}
-                </div>
-              </>
-            )}
+            {/* Visão Geral: Vendas / Recebido / A Receber / Custo / Lucro */}
+            {OVERVIEWS[current.type] && (() => {
+              const cfg = OVERVIEWS[current.type]!;
+              const list = filteredSales.filter(cfg.filter);
+              return (
+                <>
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[11px] font-bold uppercase text-slate-400">Total do período</span>
+                      <span className="text-lg font-black text-slate-900">{formatCurrency(overviewTotal(cfg.metric, list))}</span>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">{cfg.explain}</p>
+                  </div>
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente ou venda..."
+                      className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm" />
+                  </div>
+                  <div className="space-y-2.5">
+                    {list.filter(matchesSearch).map(sale => <SaleRow key={sale.id} sale={sale} metric={cfg.metric} />)}
+                    {list.length === 0 && <EmptyState text={cfg.empty} good={cfg.metric === 'remaining'} />}
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Detalhe de Produto */}
             {current.type === 'product_detail' && current.data && (() => {
@@ -304,7 +309,7 @@ export const ReportsDetailDrawer: React.FC<ReportsDetailDrawerProps> = ({
             {current.type === 'sale_detail' && current.data && (() => {
               const sale: Sale = current.data;
               const margin = sale.totalAmount > 0 ? (sale.grossProfit / sale.totalAmount) * 100 : 0;
-              const badge = getPaymentStatusBadge(sale.status);
+              const badge = getSaleStatusBadge(sale);
               const salePayments = payments.filter(p => p.saleId === sale.id).sort((a, b) => new Date(a.paymentDate).getTime() - new Date(b.paymentDate).getTime());
               const client = clients.find(c => c.id === sale.clientId);
 
@@ -374,12 +379,15 @@ export const ReportsDetailDrawer: React.FC<ReportsDetailDrawerProps> = ({
                       {salePayments.length === 0 ? (
                         <div className="p-4 text-xs text-slate-400 text-center">Nenhum pagamento registrado ainda.</div>
                       ) : salePayments.map(p => (
-                        <div key={p.id} className="flex items-center justify-between p-3 text-xs">
+                        <div key={p.id} className={`flex items-center justify-between p-3 text-xs ${p.reversedAt ? 'opacity-60' : ''}`}>
                           <div>
                             <div className="font-bold text-slate-800">{formatDate(p.paymentDate)}</div>
                             <div className="text-[10px] text-slate-400">{getPaymentMethodLabel(p.paymentMethod)}{p.notes ? ` • ${p.notes}` : ''}</div>
+                            {p.reversedAt && (
+                              <div className="text-[10px] font-bold text-slate-500">Estornado em {formatDate(p.reversedAt)}{p.reversalReason ? ` · ${p.reversalReason}` : ''}</div>
+                            )}
                           </div>
-                          <span className="font-black text-emerald-600">+{formatCurrency(p.amount)}</span>
+                          <span className={`font-black ${p.reversedAt ? 'text-slate-400 line-through' : 'text-emerald-600'}`}>+{formatCurrency(p.amount)}</span>
                         </div>
                       ))}
                       <div className="flex items-center justify-between p-3 bg-slate-50 text-xs font-bold">

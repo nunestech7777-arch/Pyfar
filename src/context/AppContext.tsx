@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { toLocalISODate, getDaysOverdue, applySaleReversals } from '../utils/financeRules';
+import { formatCurrency } from '../utils/formatters';
 import confetti from 'canvas-confetti';
 import {
   NavigationModule,
@@ -156,8 +158,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSalesState(data.sales);
     setCommissionersState(data.commissioners);
     setCommissionsState(data.commissions);
-    setFinancialTransactionsState(data.finances);
-    setPaymentsState(data.payments);
+    // Estorno de vendas canceladas antes desta regra existir (idempotente)
+    const reversal = applySaleReversals(data.sales, data.finances, data.payments);
+    setFinancialTransactionsState(reversal?.transactions ?? data.finances);
+    setPaymentsState(reversal?.payments ?? data.payments);
     setStockAdjustmentsState(data.stockAdjustments);
   };
 
@@ -314,7 +318,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       categoryLabel: 'Compra de Estoque',
       description: `Entrada Lote ${batchData.lotNumber} (${batchData.initialQuantity} un. ${batchData.vaccineName} a R$ ${batchData.unitCost.toFixed(2)})`,
       amount: totalPurchaseCost,
-      date: batchData.entryDate || new Date().toISOString().split('T')[0],
+      date: batchData.entryDate || toLocalISODate(),
       referenceId: newBatchId,
       isAutomatic: true,
       createdAt: new Date().toISOString(),
@@ -521,13 +525,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Check overdue
-    if (paymentStatus !== 'pago' && saleData.dueDate) {
-      const due = new Date(saleData.dueDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (due < today) {
-        paymentStatus = 'atrasado';
-      }
+    if (paymentStatus !== 'pago' && getDaysOverdue(saleData.dueDate) > 0) {
+      paymentStatus = 'atrasado';
     }
 
     // Check commissioner link
@@ -600,7 +599,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         categoryLabel: isFull ? 'Venda à Vista' : `Entrada de Venda (${((downPayment / totalAmount) * 100).toFixed(0)}%)`,
         description: `Recebimento da venda ${saleNumber} - ${client.name} (${client.storeName || 'Lojista'})`,
         amount: downPayment,
-        date: new Date().toISOString().split('T')[0],
+        date: toLocalISODate(),
         referenceId: saleId,
         isAutomatic: true,
         createdAt: new Date().toISOString(),
@@ -614,7 +613,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         clientId: client.id,
         clientName: client.name,
         amount: downPayment,
-        paymentDate: new Date().toISOString().split('T')[0],
+        paymentDate: toLocalISODate(),
         paymentMethod: saleData.paymentMethod,
         notes: isFull ? 'Pagamento integral à vista' : 'Valor de entrada no fechamento da venda',
       };
@@ -702,7 +701,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Cancel related commission
     setCommissionsState(prev => prev.map(c => c.saleId === id ? { ...c, status: 'cancelada' } : c));
 
-    addToast('warning', 'Venda Cancelada', `A venda ${sale.saleNumber} foi cancelada e os estoques retornados.`);
+    // Estorno: entradas e pagamentos da venda ficam no histórico, marcados como estornados
+    const cancelledSale: Sale = { ...sale, status: 'cancelado' };
+    const nowIso = new Date().toISOString();
+    setFinancialTransactionsState(prev => applySaleReversals([cancelledSale], prev, [], nowIso)?.transactions ?? prev);
+    setPaymentsState(prev => applySaleReversals([cancelledSale], [], prev, nowIso)?.payments ?? prev);
+
+    addToast(
+      'warning',
+      'Venda Cancelada',
+      sale.paidAmount > 0
+        ? `A venda ${sale.saleNumber} foi cancelada, os estoques retornados e ${formatCurrency(sale.paidAmount)} recebidos foram estornados.`
+        : `A venda ${sale.saleNumber} foi cancelada e os estoques retornados.`
+    );
   };
 
   // COMMISSIONERS
@@ -758,7 +769,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       categoryLabel: 'Comissão Paga',
       description: `Pagamento de comissão a ${comm.commissionerName} ref. venda ${comm.saleNumber} (${comm.clientName})`,
       amount: amountToPay,
-      date: new Date().toISOString().split('T')[0],
+      date: toLocalISODate(),
       referenceId: comm.id,
       isAutomatic: true,
       createdAt: new Date().toISOString(),
@@ -798,15 +809,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let newStatus: Sale['status'] = 'pendente';
     if (newRemaining <= 0) {
       newStatus = 'pago';
+    } else if (getDaysOverdue(sale.dueDate) > 0) {
+      newStatus = 'atrasado';
     } else {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const due = sale.dueDate ? new Date(sale.dueDate) : null;
-      if (due && due < today) {
-        newStatus = 'atrasado';
-      } else {
-        newStatus = 'parcialmente_pago';
-      }
+      newStatus = 'parcialmente_pago';
     }
 
     // 1. Update Sale
@@ -829,7 +835,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       clientId: sale.clientId,
       clientName: sale.clientName,
       amount: payAmount,
-      paymentDate: data.paymentDate || new Date().toISOString().split('T')[0],
+      paymentDate: data.paymentDate || toLocalISODate(),
       paymentMethod: data.paymentMethod,
       notes: data.notes || `Pagamento de parcela da venda ${sale.saleNumber}`,
     };
@@ -843,7 +849,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       categoryLabel: newStatus === 'pago' ? 'Quitação de Venda' : 'Recebimento de Parcela',
       description: `Pagamento recebido de ${sale.clientName} ref. venda ${sale.saleNumber}`,
       amount: payAmount,
-      date: data.paymentDate || new Date().toISOString().split('T')[0],
+      date: data.paymentDate || toLocalISODate(),
       referenceId: sale.id,
       isAutomatic: true,
       createdAt: new Date().toISOString(),
@@ -903,7 +909,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       categoryLabel: data.categoryLabel,
       description: data.description,
       amount: Number(data.amount),
-      date: data.date || new Date().toISOString().split('T')[0],
+      date: data.date || toLocalISODate(),
       isAutomatic: false,
       createdAt: new Date().toISOString(),
     };

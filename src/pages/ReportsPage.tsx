@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
+import { toLocalISODate, getEffectiveSaleStatus } from '../utils/financeRules';
 import { Download, Printer } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { formatCurrency } from '../utils/formatters';
+import { formatCurrency, getPaymentStatusBadge } from '../utils/formatters';
 import { PeriodFilterBar } from './reports/PeriodFilterBar';
 import { OverviewTab } from './reports/OverviewTab';
 import { ProductsTab } from './reports/ProductsTab';
@@ -61,12 +62,12 @@ export const ReportsPage: React.FC = () => {
     csv += 'Data,Pedido,Cliente,Produto,Quantidade,Custo,Faturamento,Lucro,Pago,Falta Receber,Status\n';
     filteredSales.forEach(s => {
       const productLabel = Array.from(new Set(s.items.map(i => i.vaccineName))).join(' + ');
-      csv += `"${s.createdAt}","${s.saleNumber}","${s.clientName}","${productLabel}",${s.totalQuantity},${s.totalCost},${s.totalAmount},${s.grossProfit},${s.paidAmount},${s.remainingBalance},"${s.status}"\n`;
+      csv += `"${s.createdAt}","${s.saleNumber}","${s.clientName}","${productLabel}",${s.totalQuantity},${s.totalCost},${s.totalAmount},${s.grossProfit},${s.paidAmount},${s.remainingBalance},"${getPaymentStatusBadge(getEffectiveSaleStatus(s)).label}"\n`;
     });
     const uri = encodeURI(csv);
     const link = document.createElement('a');
     link.setAttribute('href', uri);
-    link.setAttribute('download', `relatorio_vendas_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', `relatorio_vendas_${toLocalISODate()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

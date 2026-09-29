@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { toLocalISODate } from '../utils/financeRules';
 import { 
   PackagePlus, 
   Search, 
@@ -23,11 +24,11 @@ export const StockEntryPage: React.FC<{ onOpenNewBatchModal: () => void }> = ({ 
   const [initialQuantity, setInitialQuantity] = useState<number>(200);
   const [unitCost, setUnitCost] = useState<number>(350);
   const [supplier, setSupplier] = useState('');
-  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [entryDate, setEntryDate] = useState(() => toLocalISODate());
   const [expirationDate, setExpirationDate] = useState(() => {
     const d = new Date();
     d.setFullYear(d.getFullYear() + 1);
-    return d.toISOString().split('T')[0];
+    return toLocalISODate(d);
   });
   const [notes, setNotes] = useState('');
 

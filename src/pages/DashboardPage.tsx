@@ -18,11 +18,12 @@ import {
   PiggyBank
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getPeriodRange, computePeriodResult, computeCurrentPosition } from '../utils/financeRules';
 import { StatCard } from '../components/common/StatCard';
 import { ChartAreaGradient } from '../components/common/ChartAreaGradient';
 import { DonutChart, DistributionBars } from '../components/common/DonutChart';
 import { CalendarWeekStrip } from '../components/common/CalendarWeekStrip';
-import { formatCurrency, formatNumber, formatDate, getPaymentStatusBadge, isDateExpired, isDateNearExpiry } from '../utils/formatters';
+import { formatCurrency, formatNumber, formatDate, getSaleStatusBadge, isDateExpired, isDateNearExpiry } from '../utils/formatters';
 
 export const DashboardPage: React.FC<{
   onOpenNewSale: () => void;
@@ -44,39 +45,17 @@ export const DashboardPage: React.FC<{
   const totalStockUnits = batches.reduce((acc, b) => acc + b.currentQuantity, 0);
   const totalStockValue = batches.reduce((acc, b) => acc + (b.currentQuantity * b.unitCost), 0);
 
-  // 2. Vendas e Lucros
-  const totalSalesAmount = sales
-    .filter(s => s.status !== 'cancelado')
-    .reduce((acc, s) => acc + s.totalAmount, 0);
+  // 2-5. Mesmas regras do Financeiro: resultado acumulado (todo o período) + posição atual
+  const allTimeRange = getPeriodRange({ period: 'todo' });
+  const allTimeResult = computePeriodResult(sales, financialTransactions, allTimeRange.start, allTimeRange.end);
+  const currentPosition = computeCurrentPosition(sales, commissions);
 
-  const totalGrossProfit = sales
-    .filter(s => s.status !== 'cancelado')
-    .reduce((acc, s) => acc + s.grossProfit, 0);
-
-  // 3. Contas a receber & Atrasado
-  const totalReceivable = sales
-    .filter(s => s.status !== 'cancelado' && s.remainingBalance > 0)
-    .reduce((acc, s) => acc + s.remainingBalance, 0);
-
-  const totalOverdue = sales
-    .filter(s => s.status === 'atrasado' && s.remainingBalance > 0)
-    .reduce((acc, s) => acc + s.remainingBalance, 0);
-
-  // 4. Comissões pendentes
-  const totalPendingCommissions = commissions
-    .filter(c => c.status === 'liberada' || c.status === 'parcialmente_liberada' || c.status === 'pendente')
-    .reduce((acc, c) => acc + (c.totalCommission - c.paidCommission), 0);
-
-  const totalPaidCommissions = commissions
-    .reduce((acc, c) => acc + c.paidCommission, 0);
-
-  // 5. Total de despesas operacionais manuais
-  const totalManualExpenses = financialTransactions
-    .filter(f => f.type === 'saida' && !f.isAutomatic)
-    .reduce((acc, f) => acc + f.amount, 0);
-
-  // Lucro líquido estimado = lucro bruto - despesas operacionais - comissões pagas
-  const estimatedNetProfit = totalGrossProfit - totalManualExpenses - totalPaidCommissions;
+  const totalSalesAmount = allTimeResult.vendas;
+  const totalGrossProfit = allTimeResult.lucroBruto;
+  const totalReceivable = currentPosition.saldoAReceber;
+  const totalOverdue = currentPosition.emAtraso;
+  const totalPendingCommissions = currentPosition.comissoesPendentes;
+  const estimatedNetProfit = allTimeResult.lucroLiquido;
 
   // 6. Expiring & Expired lots
   const expiringLots = batches.filter(b => isDateNearExpiry(b.expirationDate) && b.currentQuantity > 0);
@@ -219,7 +198,7 @@ export const DashboardPage: React.FC<{
         <StatCard
           title="Vendas Totais"
           value={formatCurrency(totalSalesAmount)}
-          subtitle={`${sales.length} pedidos realizados`}
+          subtitle={`${allTimeResult.salesCount} vendas (acumulado)`}
           icon={ShoppingCart}
           trend={{ value: '+28.4%', isPositive: true }}
           onClick={() => setCurrentModule('vendas')}
@@ -229,7 +208,7 @@ export const DashboardPage: React.FC<{
         <StatCard
           title="Lucro Bruto"
           value={formatCurrency(totalGrossProfit)}
-          subtitle="Margem de saída sobre custo"
+          subtitle="Acumulado desde o início"
           icon={TrendingUp}
           trend={{ value: '+35.1%', isPositive: true }}
           onClick={() => setCurrentModule('financeiro')}
@@ -239,7 +218,7 @@ export const DashboardPage: React.FC<{
         <StatCard
           title="Lucro Líquido Estimado"
           value={formatCurrency(estimatedNetProfit)}
-          subtitle="Lucro Bruto - Despesas - Comissões"
+          subtitle="Acumulado: bruto − despesas − comissões"
           icon={PiggyBank}
           variant="blue"
           trend={{ value: '+18.5%', isPositive: true }}
@@ -280,7 +259,7 @@ export const DashboardPage: React.FC<{
             {formatCurrency(totalPendingCommissions)}
           </div>
           <p className="text-[11px] text-slate-500 font-medium mt-1">
-            {formatCurrency(totalPaidCommissions)} já pagas aos representantes →
+            {formatCurrency(allTimeResult.comissoes)} já pagas aos representantes →
           </p>
         </div>
 
@@ -294,7 +273,7 @@ export const DashboardPage: React.FC<{
             <Landmark className="w-4 h-4 text-rose-500" />
           </div>
           <div className="text-xl sm:text-2xl font-black text-slate-900">
-            {formatCurrency(totalManualExpenses)}
+            {formatCurrency(allTimeResult.despesas)}
           </div>
           <p className="text-[11px] text-slate-500 font-medium mt-1">
             Frete, galpão climatizado, energia, pró-labore →
@@ -366,7 +345,7 @@ export const DashboardPage: React.FC<{
             </thead>
             <tbody className="divide-y divide-slate-100">
               {sales.slice(0, 5).map((sale) => {
-                const badge = getPaymentStatusBadge(sale.status);
+                const badge = getSaleStatusBadge(sale);
                 return (
                   <tr key={sale.id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="p-3 font-mono font-bold text-blue-600">{sale.saleNumber}</td>

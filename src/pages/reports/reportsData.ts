@@ -1,15 +1,18 @@
-import { Sale, SaleItem, VaccineBatch, PaymentMethod, PaymentStatus } from '../../types';
+import type { Sale, SaleItem, VaccineBatch, PaymentMethod, PaymentStatus } from '../../types';
+import {
+  PeriodPreset, PeriodSelection, PeriodRange, getPeriodRange as getSharedPeriodRange,
+  filterSalesInRange, computeSalesTotals, SalesTotals, getEffectiveSaleStatus,
+} from '../../utils/financeRules';
+
+// Período, totais e status vêm de utils/financeRules.ts (mesmas regras do Financeiro).
+export type { PeriodPreset } from '../../utils/financeRules';
+export { PERIOD_LABELS } from '../../utils/financeRules';
 
 // ============================================================================
-// PERÍODO
+// FILTROS DOS RELATÓRIOS
 // ============================================================================
 
-export type PeriodPreset = 'hoje' | 'ontem' | '7d' | '30d' | 'mes_atual' | 'mes_anterior' | 'personalizado';
-
-export interface ReportsFilters {
-  period: PeriodPreset;
-  customStart?: string; // YYYY-MM-DD
-  customEnd?: string; // YYYY-MM-DD
+export interface ReportsFilters extends PeriodSelection {
   productName?: string;
   clientId?: string;
   batchId?: string;
@@ -20,75 +23,9 @@ export interface ReportsFilters {
 
 export const defaultFilters: ReportsFilters = { period: '30d' };
 
-const startOfDay = (d: Date) => { const c = new Date(d); c.setHours(0, 0, 0, 0); return c; };
-const endOfDay = (d: Date) => { const c = new Date(d); c.setHours(23, 59, 59, 999); return c; };
+export const REPORTS_PERIOD_OPTIONS: PeriodPreset[] = ['hoje', 'ontem', '7d', '30d', 'mes_atual', 'mes_anterior', 'personalizado'];
 
-// Retorna [inicio, fim] (inclusive) do período selecionado, e o intervalo imediatamente
-// anterior de mesma duração (usado para o comparativo "+X% em relação ao período anterior").
-export const getPeriodRange = (filters: ReportsFilters): { start: Date; end: Date; prevStart: Date; prevEnd: Date } => {
-  const today = startOfDay(new Date());
-
-  if (filters.period === 'hoje') {
-    const start = today;
-    const end = endOfDay(today);
-    const prevStart = new Date(start); prevStart.setDate(prevStart.getDate() - 1);
-    const prevEnd = endOfDay(prevStart);
-    return { start, end, prevStart, prevEnd };
-  }
-  if (filters.period === 'ontem') {
-    const start = new Date(today); start.setDate(start.getDate() - 1);
-    const end = endOfDay(start);
-    const prevStart = new Date(start); prevStart.setDate(prevStart.getDate() - 1);
-    const prevEnd = endOfDay(prevStart);
-    return { start, end, prevStart, prevEnd };
-  }
-  if (filters.period === '7d') {
-    const start = new Date(today); start.setDate(start.getDate() - 6);
-    const end = endOfDay(today);
-    const prevEnd = new Date(start); prevEnd.setDate(prevEnd.getDate() - 1);
-    const prevStart = new Date(prevEnd); prevStart.setDate(prevStart.getDate() - 6);
-    return { start, end, prevStart, prevEnd: endOfDay(prevEnd) };
-  }
-  if (filters.period === '30d') {
-    const start = new Date(today); start.setDate(start.getDate() - 29);
-    const end = endOfDay(today);
-    const prevEnd = new Date(start); prevEnd.setDate(prevEnd.getDate() - 1);
-    const prevStart = new Date(prevEnd); prevStart.setDate(prevStart.getDate() - 29);
-    return { start, end, prevStart, prevEnd: endOfDay(prevEnd) };
-  }
-  if (filters.period === 'mes_atual') {
-    const start = new Date(today.getFullYear(), today.getMonth(), 1);
-    const end = endOfDay(today);
-    const prevStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const prevEnd = new Date(today.getFullYear(), today.getMonth(), 0, 23, 59, 59, 999);
-    return { start, end, prevStart, prevEnd };
-  }
-  if (filters.period === 'mes_anterior') {
-    const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const end = new Date(today.getFullYear(), today.getMonth(), 0, 23, 59, 59, 999);
-    const prevStart = new Date(today.getFullYear(), today.getMonth() - 2, 1);
-    const prevEnd = new Date(today.getFullYear(), today.getMonth() - 1, 0, 23, 59, 59, 999);
-    return { start, end, prevStart, prevEnd };
-  }
-
-  // personalizado
-  const start = filters.customStart ? startOfDay(new Date(filters.customStart)) : startOfDay(new Date(today.getFullYear(), today.getMonth(), 1));
-  const end = filters.customEnd ? endOfDay(new Date(filters.customEnd)) : endOfDay(today);
-  const durationMs = end.getTime() - start.getTime();
-  const prevEnd = new Date(start.getTime() - 1);
-  const prevStart = new Date(prevEnd.getTime() - durationMs);
-  return { start, end, prevStart, prevEnd };
-};
-
-export const PERIOD_LABELS: Record<PeriodPreset, string> = {
-  hoje: 'Hoje',
-  ontem: 'Ontem',
-  '7d': '7 dias',
-  '30d': '30 dias',
-  mes_atual: 'Este mês',
-  mes_anterior: 'Mês anterior',
-  personalizado: 'Personalizado',
-};
+export const getPeriodRange = (filters: ReportsFilters): PeriodRange => getSharedPeriodRange(filters);
 
 // ============================================================================
 // FILTRAGEM DE VENDAS
@@ -98,52 +35,21 @@ export const saleMatchesDimensionFilters = (sale: Sale, filters: ReportsFilters)
   if (filters.clientId && sale.clientId !== filters.clientId) return false;
   if (filters.commissionerId && sale.commissionerId !== filters.commissionerId) return false;
   if (filters.paymentMethod && sale.paymentMethod !== filters.paymentMethod) return false;
-  if (filters.status && sale.status !== filters.status) return false;
+  if (filters.status && getEffectiveSaleStatus(sale) !== filters.status) return false;
   if (filters.productName && !sale.items.some(it => it.vaccineName === filters.productName)) return false;
   if (filters.batchId && !sale.items.some(it => it.batchId === filters.batchId)) return false;
   return true;
 };
 
-export const filterSalesByRange = (sales: Sale[], start: Date, end: Date, filters: ReportsFilters): Sale[] => {
-  return sales.filter(s => {
-    if (s.status === 'cancelado') return false;
-    const createdAt = new Date(s.createdAt);
-    if (createdAt < start || createdAt > end) return false;
-    return saleMatchesDimensionFilters(s, filters);
-  });
-};
+export const filterSalesByRange = (sales: Sale[], start: Date, end: Date, filters: ReportsFilters): Sale[] =>
+  filterSalesInRange(sales, start, end).filter(s => saleMatchesDimensionFilters(s, filters));
 
 // ============================================================================
 // TOTAIS (RECONCILIÁVEIS: vendas = recebido + a receber, sempre)
 // ============================================================================
 
-export interface ReportsTotals {
-  vendas: number;
-  recebido: number;
-  aReceber: number;
-  custo: number;
-  lucro: number;
-  margem: number;
-  unidades: number;
-  salesCount: number;
-}
-
-export const computeTotals = (sales: Sale[]): ReportsTotals => {
-  const vendas = sales.reduce((acc, s) => acc + s.totalAmount, 0);
-  const recebido = sales.reduce((acc, s) => acc + s.paidAmount, 0);
-  const custo = sales.reduce((acc, s) => acc + s.totalCost, 0);
-  const lucro = vendas - custo;
-  return {
-    vendas,
-    recebido,
-    aReceber: vendas - recebido,
-    custo,
-    lucro,
-    margem: vendas > 0 ? (lucro / vendas) * 100 : 0,
-    unidades: sales.reduce((acc, s) => acc + s.totalQuantity, 0),
-    salesCount: sales.length,
-  };
-};
+export type ReportsTotals = SalesTotals;
+export const computeTotals = computeSalesTotals;
 
 export const percentChange = (current: number, previous: number): number | null => {
   if (previous === 0) return current === 0 ? 0 : null; // sem base de comparação

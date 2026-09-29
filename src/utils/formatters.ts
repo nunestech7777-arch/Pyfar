@@ -1,3 +1,6 @@
+import type { Sale } from '../types';
+import { getDaysOverdue as getDaysOverdueRule, getEffectiveSaleStatus } from './financeRules';
+
 export const formatCurrency = (value: number | undefined | null): string => {
   if (value === undefined || value === null || isNaN(value)) return 'R$ 0,00';
   return new Intl.NumberFormat('pt-BR', {
@@ -62,15 +65,7 @@ export const isDateNearExpiry = (expirationDate: string, daysThreshold: number =
   return diffDays >= 0 && diffDays <= daysThreshold;
 };
 
-export const getDaysOverdue = (dueDate: string): number => {
-  if (!dueDate) return 0;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const due = new Date(dueDate);
-  const diffTime = today.getTime() - due.getTime();
-  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-  return diffDays > 0 ? diffDays : 0;
-};
+export const getDaysOverdue = (dueDate: string): number => getDaysOverdueRule(dueDate);
 
 export const getPaymentStatusBadge = (status: string) => {
   switch (status) {
@@ -88,6 +83,9 @@ export const getPaymentStatusBadge = (status: string) => {
       return { label: status, bg: 'bg-slate-50 text-slate-700 border-slate-200' };
   }
 };
+
+// Badge de uma venda pelo status calculado (vencimento/valores), não pelo status gravado.
+export const getSaleStatusBadge = (sale: Sale) => getPaymentStatusBadge(getEffectiveSaleStatus(sale));
 
 export const getCommissionStatusBadge = (status: string) => {
   switch (status) {

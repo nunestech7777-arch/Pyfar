@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { toLocalISODate } from '../../utils/financeRules';
 import { 
   X, 
   Plus, 
@@ -38,7 +39,7 @@ export const NewSaleModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
   const [dueDate, setDueDate] = useState<string>(() => {
     const d = new Date();
     d.setDate(d.getDate() + 7);
-    return d.toISOString().split('T')[0];
+    return toLocalISODate(d);
   });
   const [notes, setNotes] = useState<string>('');
 
@@ -56,14 +57,14 @@ export const NewSaleModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
   const calculateDueDateFromDays = (days: number) => {
     const d = new Date();
     d.setDate(d.getDate() + Number(days));
-    return d.toISOString().split('T')[0];
+    return toLocalISODate(d);
   };
 
   const handlePaymentConditionChange = (cond: 'a_vista' | 'a_prazo', currentTotal: number) => {
     setPaymentCondition(cond);
     if (cond === 'a_vista') {
       setDownPayment(currentTotal);
-      setDueDate(new Date().toISOString().split('T')[0]);
+      setDueDate(toLocalISODate());
     } else {
       if (downPayment >= currentTotal) {
         setDownPayment(0);

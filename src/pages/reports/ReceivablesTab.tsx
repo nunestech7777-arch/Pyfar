@@ -1,27 +1,18 @@
 import React from 'react';
 import { AlertTriangle, Clock, CalendarClock } from 'lucide-react';
-import { formatCurrency, formatDate, getDaysOverdue, getPaymentStatusBadge } from '../../utils/formatters';
+import { formatCurrency, formatDate, getDaysOverdue, getSaleStatusBadge } from '../../utils/formatters';
 import { Sale } from '../../types';
+import { computeCurrentPosition, getDaysUntilDue } from '../../utils/financeRules';
 
 interface ReceivablesTabProps {
   sales: Sale[]; // já filtradas pelas dimensões (cliente/produto/lote/vendedor/pagamento/status), NÃO pelo período
   onOpenSale: (sale: Sale) => void;
 }
 
-const daysUntilDue = (dueDate: string): number => {
-  if (!dueDate) return Infinity;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const due = new Date(dueDate);
-  return Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-};
-
 export const ReceivablesTab: React.FC<ReceivablesTabProps> = ({ sales, onOpenSale }) => {
-  const open = sales.filter(s => s.status !== 'cancelado' && s.remainingBalance > 0);
-
-  const totalReceivable = open.reduce((a, s) => a + s.remainingBalance, 0);
-  const dueToday = open.filter(s => daysUntilDue(s.dueDate) === 0);
-  const dueSoon = open.filter(s => { const d = daysUntilDue(s.dueDate); return d > 0 && d <= 7; });
-  const overdue = open.filter(s => getDaysOverdue(s.dueDate) > 0);
+  const { openSales: open, overdueSales: overdue, saldoAReceber: totalReceivable } = computeCurrentPosition(sales, []);
+  const dueToday = open.filter(s => getDaysUntilDue(s.dueDate) === 0);
+  const dueSoon = open.filter(s => { const d = getDaysUntilDue(s.dueDate); return d > 0 && d <= 7; });
 
   const sorted = [...open].sort((a, b) => getDaysOverdue(b.dueDate) - getDaysOverdue(a.dueDate));
 
@@ -55,7 +46,7 @@ export const ReceivablesTab: React.FC<ReceivablesTabProps> = ({ sales, onOpenSal
       ) : (
         <div className="space-y-2.5">
           {sorted.map(sale => {
-            const badge = getPaymentStatusBadge(sale.status);
+            const badge = getSaleStatusBadge(sale);
             const overdueDays = getDaysOverdue(sale.dueDate);
             return (
               <button

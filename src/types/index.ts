@@ -79,6 +79,10 @@ export interface PaymentRecord {
   paymentDate: string;
   paymentMethod: PaymentMethod;
   notes?: string;
+  // Estorno: preenchido quando a venda foi cancelada. O registro é mantido para auditoria,
+  // mas deixa de contar como recebimento.
+  reversedAt?: string;
+  reversalReason?: string;
 }
 
 export interface Sale {
@@ -170,6 +174,9 @@ export interface FinancialTransaction {
   referenceId?: string; // saleId, batchId, commissionId
   isAutomatic: boolean;
   createdAt: string;
+  // Estorno de entrada de venda cancelada: mantida no histórico, fora dos totais.
+  reversedAt?: string;
+  reversalReason?: string;
 }
 
 export type StockAdjustmentType = 'adicionar' | 'remover' | 'definir';

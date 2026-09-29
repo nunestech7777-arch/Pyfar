@@ -2,7 +2,7 @@ import React from 'react';
 import { X, Printer, Copy, Check, Share2, Syringe, FileText, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Sale } from '../../types';
-import { formatCurrency, formatDate, getPaymentMethodLabel, getPaymentStatusBadge } from '../../utils/formatters';
+import { formatCurrency, formatDate, getPaymentMethodLabel, getSaleStatusBadge } from '../../utils/formatters';
 
 export const ReceiptModal: React.FC = () => {
   const { viewingReceiptSale, setViewingReceiptSale, user, addToast } = useApp();
@@ -11,7 +11,7 @@ export const ReceiptModal: React.FC = () => {
   if (!viewingReceiptSale) return null;
 
   const sale: Sale = viewingReceiptSale;
-  const statusBadge = getPaymentStatusBadge(sale.status);
+  const statusBadge = getSaleStatusBadge(sale);
 
   // Generate WhatsApp formatted text
   const generateWhatsAppText = () => {

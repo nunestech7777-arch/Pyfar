@@ -1,5 +1,5 @@
 import React from 'react';
-import { formatCurrency, formatDate, getPaymentStatusBadge } from '../../utils/formatters';
+import { formatCurrency, formatDate, getSaleStatusBadge } from '../../utils/formatters';
 import { Sale } from '../../types';
 
 interface SalesTabProps {
@@ -35,7 +35,7 @@ export const SalesTab: React.FC<SalesTabProps> = ({ sales, onOpenSale }) => {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {sales.map(sale => {
-              const badge = getPaymentStatusBadge(sale.status);
+              const badge = getSaleStatusBadge(sale);
               const productLabel = Array.from(new Set(sale.items.map(i => i.vaccineName))).join(' + ');
               return (
                 <tr key={sale.id} onClick={() => onOpenSale(sale)} className="hover:bg-slate-50/70 cursor-pointer transition-colors">
@@ -59,7 +59,7 @@ export const SalesTab: React.FC<SalesTabProps> = ({ sales, onOpenSale }) => {
       {/* Mobile cards */}
       <div className="sm:hidden divide-y divide-slate-100">
         {sales.map(sale => {
-          const badge = getPaymentStatusBadge(sale.status);
+          const badge = getSaleStatusBadge(sale);
           const productLabel = Array.from(new Set(sale.items.map(i => i.vaccineName))).join(' + ');
           return (
             <button key={sale.id} onClick={() => onOpenSale(sale)} className="w-full text-left p-4 space-y-2 active:bg-slate-50">

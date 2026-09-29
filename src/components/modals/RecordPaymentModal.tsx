@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { toLocalISODate } from '../../utils/financeRules';
 import { X, CheckCircle, CreditCard, DollarSign, Calendar } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Sale, PaymentMethod } from '../../types';
@@ -18,7 +19,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   const { recordPayment, addToast } = useApp();
 
   const [amount, setAmount] = useState<number>(0);
-  const [paymentDate, setPaymentDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [paymentDate, setPaymentDate] = useState<string>(() => toLocalISODate());
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('pix');
   const [notes, setNotes] = useState<string>('');
 

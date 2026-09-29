@@ -13,8 +13,9 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { formatCurrency, formatDate, getDaysOverdue, getPaymentStatusBadge } from '../utils/formatters';
+import { formatCurrency, formatDate, getDaysOverdue, getSaleStatusBadge } from '../utils/formatters';
 import { Sale } from '../types';
+import { isSaleOverdue } from '../utils/financeRules';
 
 export const ReceivablesPage: React.FC<{
   onOpenRecordPayment: (sale: Sale) => void;
@@ -32,7 +33,7 @@ export const ReceivablesPage: React.FC<{
   const processedSales = eligibleSales.map(sale => {
     const isPaid = sale.remainingBalance <= 0;
     const daysOverdue = getDaysOverdue(sale.dueDate);
-    const isOverdue = !isPaid && daysOverdue > 0;
+    const isOverdue = isSaleOverdue(sale);
 
     return {
       ...sale,
@@ -175,7 +176,7 @@ export const ReceivablesPage: React.FC<{
                 </tr>
               ) : (
                 filteredSales.map((sale) => {
-                  const badge = getPaymentStatusBadge(sale.status);
+                  const badge = getSaleStatusBadge(sale);
 
                   return (
                     <tr key={sale.id} className="hover:bg-slate-50/70 transition-colors">

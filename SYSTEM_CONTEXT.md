@@ -223,7 +223,16 @@ src/
 
 ## 6. FINANCIAL RULES AND FORMULAS
 
-All financial numbers across Cards, Tabs, and the Detail Drawer must **reconcile 100%**:
+All financial numbers across Cards, Tabs, and the Detail Drawer must **reconcile 100%**.
+
+**Single source of rules: `src/utils/financeRules.ts`** (pure module, only `import type`). Financeiro, its drawer, Relatórios, Dashboard, Contas a Receber, Sidebar/Header badges all call it. Never re-implement these filters inline.
+- **Periods** (`getPeriodRange`): `mes_atual`/`3_meses`/`ano_atual` are full calendar months/year (end = last day, not today), `todo` = all time. Financeiro offers `FINANCIAL_PERIOD_OPTIONS` (default `mes_atual`); Relatórios uses its own subset.
+- **Resultado do Período** (`computePeriodResult`): sales by `Sale.createdAt`; "recebido" = `paidAmount` to date of *those* sales; custo = `sale.totalCost` (historical); despesas = manual `saida` tx by `tx.date`; comissões = `comissao_paga` tx by `tx.date`; compras de estoque = `compra_estoque` tx by `tx.date` (not batches — deleted batches keep their purchase).
+- **Posição Atual** (`computeCurrentPosition`): never period-filtered — saldo a receber, em atraso, comissões pendentes.
+- **Overdue / status** (`isSaleOverdue`, `getEffectiveSaleStatus`, badge via `getSaleStatusBadge`): computed from `remainingBalance` + `dueDate` vs today. The stored `sale.status` goes stale after the due date and must not be used for display or filtering (only `'cancelado'` is authoritative).
+- **Dates**: `'YYYY-MM-DD'` strings are LOCAL dates — parse with `parseLocalDate`, create with `toLocalISODate()`. Never `new Date('YYYY-MM-DD')` nor `toISOString().split('T')[0]` (UTC shifts entries after 21h to the next day in Brazil).
+- The Financeiro tabs below the card (Entradas, Saídas, Despesas, Comissões, Contas a Receber) intentionally show all-time data, labeled "(histórico)".
+- **Cancelled sale with payments = estorno by marking** (`applySaleReversals`): its `entrada` tx and `PaymentRecord`s get `reversedAt`/`reversalReason`, stay visible (struck through, "Estornado") and are excluded from totals via `isCountedEntry`. No `saida` is created (the money may have been reused in another sale). Applied in `cancelSale` and idempotently on load for sales cancelled before this rule. A `comissao_paga` already made for a cancelled sale is NOT reversed (real cash paid to the rep).
 
 ### 1. Total Faturado (Gross Revenue)
 - **Definition**: Total invoiced revenue across all non-cancelled sales.

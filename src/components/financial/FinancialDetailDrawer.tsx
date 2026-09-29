@@ -29,11 +29,12 @@ import {
   formatCurrency, 
   formatDate, 
   getDaysOverdue, 
-  getPaymentStatusBadge, 
+  getSaleStatusBadge, 
   getCommissionStatusBadge, 
   getPaymentMethodLabel 
 } from '../../utils/formatters';
 import { Sale, VaccineBatch, CommissionEntry, FinancialTransaction, Client } from '../../types';
+import { computePeriodResult, computeCurrentPosition, isSaleOverdue, isCommissionPending } from '../../utils/financeRules';
 
 export type FinancialDrawerType = 
   | 'revenue'               // 1. Total Faturado
@@ -59,6 +60,10 @@ interface FinancialDetailDrawerProps {
   initialType: FinancialDrawerType;
   onOpenRecordPayment?: (sale: Sale) => void;
   onOpenReceipt?: (sale: Sale) => void;
+  // Período do "Resultado do Período" do card; os tipos de Posição Atual ignoram.
+  periodStart: Date;
+  periodEnd: Date;
+  periodLabel: string;
 }
 
 export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
@@ -66,7 +71,10 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
   onClose,
   initialType,
   onOpenRecordPayment,
-  onOpenReceipt
+  onOpenReceipt,
+  periodStart,
+  periodEnd,
+  periodLabel,
 }) => {
   const { sales, batches, commissions, financialTransactions, clients } = useApp();
 
@@ -80,11 +88,11 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
     if (isOpen) {
       const getInitialTitle = (t: FinancialDrawerType) => {
         switch (t) {
-          case 'revenue': return 'Detalhamento do Faturamento';
-          case 'gross_profit': return 'Composição do Lucro Bruto';
-          case 'expenses_commissions': return 'Detalhamento de Despesas e Comissões';
-          case 'net_profit': return 'Composição do Lucro Líquido';
-          case 'stock_purchased': return 'Detalhamento de Estoque Comprado';
+          case 'revenue': return `Faturamento — ${periodLabel}`;
+          case 'gross_profit': return `Lucro Bruto — ${periodLabel}`;
+          case 'expenses_commissions': return `Despesas e Comissões — ${periodLabel}`;
+          case 'net_profit': return `Lucro Líquido — ${periodLabel}`;
+          case 'stock_purchased': return `Compras de Estoque — ${periodLabel}`;
           case 'receivables': return 'Saldo a Receber (Prazo)';
           case 'overdue': return 'Títulos e Vendas em Atraso';
           case 'pending_commissions': return 'Comissões Pendentes e Liberadas';
@@ -95,6 +103,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
       setSearchFilter('');
       setTabFilter('todas');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, initialType]);
 
   if (!isOpen || history.length === 0) return null;
@@ -116,36 +125,39 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
   };
 
   // -------------------------------------------------------------
-  // Data Sources (Shared exactly with Financial Page for 100% reconciliation)
+  // Mesmas regras do card (utils/financeRules.ts) para o detalhe sempre somar o valor exibido.
+  // Resultado do Período: filtrado por periodStart/periodEnd. Posição Atual: fotografia de hoje.
   // -------------------------------------------------------------
-  const activeSales = sales.filter(s => s.status !== 'cancelado');
-  const totalSold = activeSales.reduce((acc, s) => acc + s.totalAmount, 0);
-  const totalCostOfGoodsSold = activeSales.reduce((acc, s) => acc + s.totalCost, 0);
-  const grossProfit = totalSold - totalCostOfGoodsSold;
-  const overallMargin = totalSold > 0 ? (grossProfit / totalSold) * 100 : 0;
+  const periodResult = computePeriodResult(sales, financialTransactions, periodStart, periodEnd);
+  const currentPosition = computeCurrentPosition(sales, commissions);
 
-  const totalReceived = activeSales.reduce((acc, s) => acc + s.paidAmount, 0);
-  const totalReceivable = activeSales.reduce((acc, s) => acc + s.remainingBalance, 0);
-  const totalOverdue = activeSales.filter(s => s.status === 'atrasado').reduce((acc, s) => acc + s.remainingBalance, 0);
+  const activeSales = periodResult.sales;
+  const totalSold = periodResult.vendas;
+  const totalCostOfGoodsSold = periodResult.custo;
+  const grossProfit = periodResult.lucroBruto;
+  const overallMargin = periodResult.margem;
+  const totalReceived = periodResult.recebido;
 
-  const totalStockPurchased = batches.reduce((acc, b) => acc + (b.initialQuantity * b.unitCost), 0);
-  const totalUnitsPurchased = batches.reduce((acc, b) => acc + b.initialQuantity, 0);
+  const openSales = currentPosition.openSales;
+  const totalReceivable = currentPosition.saldoAReceber;
+  const totalOverdue = currentPosition.emAtraso;
 
-  const operatingExpensesList = financialTransactions.filter(f => f.type === 'saida' && !f.isAutomatic);
-  const totalOperatingExpenses = operatingExpensesList.reduce((acc, f) => acc + f.amount, 0);
+  const stockPurchaseList = periodResult.stockPurchases;
+  const totalStockPurchased = periodResult.comprasEstoque;
 
-  const totalCommissionsPaid = commissions.reduce((acc, c) => acc + c.paidCommission, 0);
-  const totalCommissionsPending = commissions
-    .filter(c => c.status === 'liberada' || c.status === 'parcialmente_liberada' || c.status === 'pendente')
-    .reduce((acc, c) => acc + (c.totalCommission - c.paidCommission), 0);
-  const totalCommissionsAll = commissions.reduce((acc, c) => acc + c.totalCommission, 0);
+  const operatingExpensesList = periodResult.expenses;
+  const totalOperatingExpenses = periodResult.despesas;
 
-  const estimatedNetProfit = grossProfit - totalOperatingExpenses - totalCommissionsPaid;
+  const totalCommissionsPaid = periodResult.comissoes;
+  const commissionPaidInPeriod = (commissionId: string) =>
+    periodResult.commissionPayments.filter(tx => tx.referenceId === commissionId).reduce((acc, tx) => acc + tx.amount, 0);
+  const commissionsPaidInPeriod = commissions.filter(c => commissionPaidInPeriod(c.id) > 0);
+  const totalCommissionsPending = currentPosition.comissoesPendentes;
+
+  const estimatedNetProfit = periodResult.lucroLiquido;
   const netMargin = totalSold > 0 ? (estimatedNetProfit / totalSold) * 100 : 0;
 
-  // Processed Overdue list
-  const overdueSalesList = activeSales
-    .filter(s => s.status === 'atrasado' || (s.remainingBalance > 0 && getDaysOverdue(s.dueDate) > 0))
+  const overdueSalesList = currentPosition.overdueSales
     .map(s => ({
       ...s,
       daysOverdue: getDaysOverdue(s.dueDate),
@@ -251,7 +263,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                     <div className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight my-1.5">
                       {formatCurrency(totalSold)}
                     </div>
-                    <span className="text-[11px] text-slate-500 font-medium">Receita bruta global de vendas</span>
+                    <span className="text-[11px] text-slate-500 font-medium">Vendas de {periodLabel}</span>
                   </div>
 
                   <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col justify-between">
@@ -264,7 +276,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                     <div className="text-xl sm:text-2xl font-black text-emerald-600 tracking-tight my-1.5">
                       {formatCurrency(totalReceived)}
                     </div>
-                    <span className="text-[11px] text-slate-500 font-medium">À vista + parcelas quitadas</span>
+                    <span className="text-[11px] text-slate-500 font-medium">Recebido até hoje dessas vendas</span>
                   </div>
 
                   <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col justify-between">
@@ -275,9 +287,9 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                       </span>
                     </div>
                     <div className="text-xl sm:text-2xl font-black text-amber-600 tracking-tight my-1.5">
-                      {formatCurrency(totalReceivable)}
+                      {formatCurrency(periodResult.aReceber)}
                     </div>
-                    <span className="text-[11px] text-slate-500 font-medium">Contas e parcelas pendentes</span>
+                    <span className="text-[11px] text-slate-500 font-medium">A receber dessas vendas</span>
                   </div>
 
                   <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm flex flex-col justify-between">
@@ -327,7 +339,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                       s.saleNumber.toLowerCase().includes(searchFilter.toLowerCase())
                     )
                     .map(sale => {
-                      const badge = getPaymentStatusBadge(sale.status);
+                      const badge = getSaleStatusBadge(sale);
                       return (
                         <div
                           key={sale.id}
@@ -508,7 +520,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                   {[
                     { id: 'todas', label: 'Todas as Saídas' },
                     { id: 'despesas', label: `Despesas (${operatingExpensesList.length})` },
-                    { id: 'comissoes', label: `Comissões (${commissions.length})` }
+                    { id: 'comissoes', label: `Comissões (${commissionsPaidInPeriod.length})` }
                   ].map(tab => (
                     <button
                       key={tab.id}
@@ -581,9 +593,9 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                   {(tabFilter === 'todas' || tabFilter === 'comissoes') && (
                     <div className="space-y-2 pt-3">
                       <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-                        Comissões de Representantes
+                        Comissões pagas no período
                       </span>
-                      {commissions
+                      {commissionsPaidInPeriod
                         .filter(c => 
                           c.commissionerName.toLowerCase().includes(searchFilter.toLowerCase()) ||
                           c.clientName.toLowerCase().includes(searchFilter.toLowerCase()) ||
@@ -623,7 +635,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
 
                               <div className="flex items-center justify-between text-[11px] text-slate-500 bg-slate-50 p-2 rounded-xl border border-slate-100">
                                 <span>Cliente: <strong>{comm.clientName}</strong></span>
-                                <span>Paga: <strong className="text-emerald-600">{formatCurrency(comm.paidCommission)}</strong></span>
+                                <span>Paga no período: <strong className="text-emerald-600">{formatCurrency(commissionPaidInPeriod(comm.id))}</strong></span>
                                 <span className="text-blue-600 font-bold flex items-center gap-0.5">
                                   Ver Venda <ChevronRight className="w-3 h-3" />
                                 </span>
@@ -661,7 +673,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                     
                     {/* Line 1: Faturado */}
                     <div 
-                      onClick={() => pushStep({ type: 'revenue', title: 'Detalhamento do Faturamento' })}
+                      onClick={() => pushStep({ type: 'revenue', title: `Faturamento — ${periodLabel}` })}
                       className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer border border-white/5"
                     >
                       <div className="flex items-center gap-2">
@@ -676,7 +688,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
 
                     {/* Line 2: CMV */}
                     <div 
-                      onClick={() => pushStep({ type: 'gross_profit', title: 'Composição do Lucro Bruto' })}
+                      onClick={() => pushStep({ type: 'gross_profit', title: `Lucro Bruto — ${periodLabel}` })}
                       className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer border border-white/5"
                     >
                       <div className="flex items-center gap-2">
@@ -691,7 +703,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
 
                     {/* Line 3: Lucro Bruto */}
                     <div 
-                      onClick={() => pushStep({ type: 'gross_profit', title: 'Composição do Lucro Bruto' })}
+                      onClick={() => pushStep({ type: 'gross_profit', title: `Lucro Bruto — ${periodLabel}` })}
                       className="flex items-center justify-between p-2.5 rounded-xl bg-emerald-950/40 hover:bg-emerald-900/50 transition-colors cursor-pointer border border-emerald-500/30"
                     >
                       <div className="flex items-center gap-2">
@@ -706,7 +718,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
 
                     {/* Line 4: Despesas Operacionais */}
                     <div 
-                      onClick={() => pushStep({ type: 'expenses_commissions', title: 'Detalhamento de Despesas' })}
+                      onClick={() => pushStep({ type: 'expenses_commissions', title: `Despesas — ${periodLabel}` })}
                       className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer border border-white/5"
                     >
                       <div className="flex items-center gap-2">
@@ -721,7 +733,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
 
                     {/* Line 5: Comissoes */}
                     <div 
-                      onClick={() => pushStep({ type: 'expenses_commissions', title: 'Detalhamento de Comissões' })}
+                      onClick={() => pushStep({ type: 'expenses_commissions', title: `Comissões — ${periodLabel}` })}
                       className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 hover:bg-white/10 transition-colors cursor-pointer border border-white/5"
                     >
                       <div className="flex items-center gap-2">
@@ -763,95 +775,73 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
             {/* ========================================================================= */}
             {currentStep.type === 'stock_purchased' && (
               <div className="space-y-5 animate-in fade-in duration-150">
-                {/* Top Summary */}
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3">
                   <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Investimento Total</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Compras no Período</span>
                     <div className="text-lg font-black text-slate-900 mt-0.5">{formatCurrency(totalStockPurchased)}</div>
-                    <span className="text-[10px] text-emerald-600 font-semibold">Custo de aquisição</span>
+                    <span className="text-[10px] text-emerald-600 font-semibold">Saídas "Compra de Estoque"</span>
                   </div>
-
                   <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Total de Lotes</span>
-                    <div className="text-lg font-black text-slate-900 mt-0.5">{batches.length}</div>
-                    <span className="text-[10px] text-slate-400">Entradas cadastradas</span>
-                  </div>
-
-                  <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm">
-                    <span className="text-[10px] font-bold text-blue-600 uppercase block">Quantidade Total</span>
-                    <div className="text-lg font-black text-blue-700 mt-0.5">{totalUnitsPurchased} un</div>
-                    <span className="text-[10px] text-blue-600 font-medium">Unidades adquiridas</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase block">Lançamentos</span>
+                    <div className="text-lg font-black text-slate-900 mt-0.5">{stockPurchaseList.length}</div>
+                    <span className="text-[10px] text-slate-400">Entradas de lote no período</span>
                   </div>
                 </div>
 
-                {/* Search Bar */}
+                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3.5 text-xs text-blue-900">
+                  Isto é o que saiu do caixa para comprar estoque no período, pela data da entrada do lote. Não é o valor do estoque atual, e não reduz o lucro: o custo entra no lucro quando o produto é vendido.
+                </div>
+
                 <div className="relative">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                   <input
                     type="text"
                     value={searchFilter}
                     onChange={(e) => setSearchFilter(e.target.value)}
-                    placeholder="Buscar lote, vacina, fornecedor..."
+                    placeholder="Buscar lote, produto, fornecedor..."
                     className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
                   />
                 </div>
 
-                {/* Batches List */}
                 <div className="space-y-2.5">
-                  <div className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-                    <span>Lotes de Estoque Adquiridos</span>
-                    <span className="text-[10px] text-slate-400 font-normal">{batches.length} registros</span>
-                  </div>
-
-                  {batches
-                    .filter(b => 
-                      b.vaccineName.toLowerCase().includes(searchFilter.toLowerCase()) ||
-                      b.lotNumber.toLowerCase().includes(searchFilter.toLowerCase()) ||
-                      (b.supplier && b.supplier.toLowerCase().includes(searchFilter.toLowerCase()))
-                    )
-                    .map(batch => {
-                      const totalBatchCost = batch.initialQuantity * batch.unitCost;
-                      return (
-                        <div
-                          key={batch.id}
-                          className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-2.5"
-                        >
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-extrabold text-slate-900 text-sm">{batch.vaccineName}</span>
-                                <span className="font-mono text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md font-bold">
-                                  Lote: {batch.lotNumber}
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-slate-500 mt-0.5">
-                                Fornecedor: <strong>{batch.supplier || 'Fabricante Padrão'}</strong> • Entrada: {formatDate(batch.entryDate)}
-                              </div>
+                  {stockPurchaseList.length === 0 && (
+                    <div className="bg-white p-6 rounded-2xl border border-slate-200 text-center text-xs text-slate-500">
+                      Nenhuma compra de estoque neste período.
+                    </div>
+                  )}
+                  {stockPurchaseList
+                    .map(tx => ({ tx, batch: batches.find(b => b.id === tx.referenceId) }))
+                    .filter(({ tx, batch }) => {
+                      const q = searchFilter.toLowerCase();
+                      return tx.description.toLowerCase().includes(q) ||
+                        (batch?.vaccineName.toLowerCase().includes(q) ?? false) ||
+                        (batch?.lotNumber.toLowerCase().includes(q) ?? false) ||
+                        (batch?.supplier?.toLowerCase().includes(q) ?? false);
+                    })
+                    .map(({ tx, batch }) => (
+                      <div key={tx.id} className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-extrabold text-slate-900 text-sm">
+                              {batch ? `${batch.vaccineName} — Lote ${batch.lotNumber}` : tx.description}
                             </div>
-
-                            <div className="text-right">
-                              <span className="text-[10px] text-slate-400 block font-semibold">Custo Total Lote</span>
-                              <span className="text-sm font-black text-slate-900">{formatCurrency(totalBatchCost)}</span>
+                            <div className="text-[11px] text-slate-500 mt-0.5">
+                              Data: <strong>{formatDate(tx.date)}</strong>
+                              {batch?.supplier && <> • Fornecedor: <strong>{batch.supplier}</strong></>}
+                              {!batch && <> • <span className="text-amber-600 font-semibold">lote excluído do estoque</span></>}
                             </div>
                           </div>
-
-                          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-xl text-xs border border-slate-100">
-                            <div>
-                              <span className="text-[10px] text-slate-400 block">Qtd. Comprada</span>
-                              <strong className="text-slate-800">{batch.initialQuantity} un</strong>
-                            </div>
-                            <div>
-                              <span className="text-[10px] text-slate-400 block">Saldo Atual</span>
-                              <strong className="text-blue-600">{batch.currentQuantity} un</strong>
-                            </div>
-                            <div className="text-right">
-                              <span className="text-[10px] text-slate-400 block">Custo Unitário</span>
-                              <strong className="text-slate-800">{formatCurrency(batch.unitCost)}</strong>
-                            </div>
-                          </div>
+                          <span className="text-sm font-black text-slate-900 whitespace-nowrap">{formatCurrency(tx.amount)}</span>
                         </div>
-                      );
-                    })}
+                        {batch && (
+                          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-xl text-xs border border-slate-100">
+                            <div><span className="text-[10px] text-slate-400 block">Qtd. Comprada</span><strong className="text-slate-800">{batch.initialQuantity} un</strong></div>
+                            <div><span className="text-[10px] text-slate-400 block">Saldo Atual</span><strong className="text-blue-600">{batch.currentQuantity} un</strong></div>
+                            <div className="text-right"><span className="text-[10px] text-slate-400 block">Custo Unitário</span><strong className="text-slate-800">{formatCurrency(batch.unitCost)}</strong></div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                 </div>
               </div>
             )}
@@ -872,7 +862,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                   <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm">
                     <span className="text-[10px] font-bold text-slate-400 uppercase block">Clientes Devedores</span>
                     <div className="text-lg font-black text-slate-900 mt-0.5">
-                      {new Set(activeSales.filter(s => s.remainingBalance > 0).map(s => s.clientId)).size}
+                      {new Set(openSales.map(s => s.clientId)).size}
                     </div>
                     <span className="text-[10px] text-slate-400">Contas ativas</span>
                   </div>
@@ -880,7 +870,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                   <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm">
                     <span className="text-[10px] font-bold text-blue-600 uppercase block">Vendas Pendentes</span>
                     <div className="text-lg font-black text-blue-700 mt-0.5">
-                      {activeSales.filter(s => s.remainingBalance > 0).length}
+                      {openSales.length}
                     </div>
                     <span className="text-[10px] text-blue-600 font-medium">Pedidos com saldo</span>
                   </div>
@@ -905,15 +895,14 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                     <span className="text-[10px] text-slate-400 font-normal">Clique para ver detalhes</span>
                   </div>
 
-                  {activeSales
-                    .filter(s => s.remainingBalance > 0)
+                  {openSales
                     .filter(s => 
                       s.clientName.toLowerCase().includes(searchFilter.toLowerCase()) ||
                       s.saleNumber.toLowerCase().includes(searchFilter.toLowerCase())
                     )
                     .map(sale => {
-                      const badge = getPaymentStatusBadge(sale.status);
-                      const isOverdue = sale.status === 'atrasado' || getDaysOverdue(sale.dueDate) > 0;
+                      const badge = getSaleStatusBadge(sale);
+                      const isOverdue = isSaleOverdue(sale);
 
                       return (
                         <div
@@ -1088,7 +1077,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                   <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-sm">
                     <span className="text-[10px] font-bold text-slate-400 uppercase block">Quantidade de Comissões</span>
                     <div className="text-lg font-black text-slate-900 mt-0.5">
-                      {commissions.filter(c => c.status !== 'paga' && c.status !== 'cancelada').length}
+                      {currentPosition.pendingCommissions.length}
                     </div>
                     <span className="text-[10px] text-emerald-600 font-semibold">Em acompanhamento</span>
                   </div>
@@ -1114,7 +1103,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
                   </div>
 
                   {commissions
-                    .filter(c => c.status !== 'paga' && c.status !== 'cancelada')
+                    .filter(isCommissionPending)
                     .filter(c => 
                       c.commissionerName.toLowerCase().includes(searchFilter.toLowerCase()) ||
                       c.clientName.toLowerCase().includes(searchFilter.toLowerCase()) ||
@@ -1177,7 +1166,7 @@ export const FinancialDetailDrawer: React.FC<FinancialDetailDrawerProps> = ({
             {currentStep.type === 'sale_detail' && currentStep.data && (() => {
               const sale: Sale = currentStep.data;
               const saleMargin = sale.totalAmount > 0 ? (sale.grossProfit / sale.totalAmount) * 100 : 0;
-              const badge = getPaymentStatusBadge(sale.status);
+              const badge = getSaleStatusBadge(sale);
 
               return (
                 <div className="space-y-5 animate-in fade-in duration-150">

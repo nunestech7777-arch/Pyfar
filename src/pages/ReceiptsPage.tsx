@@ -12,7 +12,7 @@ import {
   Building2 
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { formatCurrency, formatDate, getPaymentMethodLabel, getPaymentStatusBadge } from '../utils/formatters';
+import { formatCurrency, formatDate, getPaymentMethodLabel, getSaleStatusBadge } from '../utils/formatters';
 
 export const ReceiptsPage: React.FC = () => {
   const { sales, setViewingReceiptSale, globalSearch } = useApp();
@@ -69,7 +69,7 @@ export const ReceiptsPage: React.FC = () => {
           </div>
         ) : (
           filteredSales.map((sale) => {
-            const statusBadge = getPaymentStatusBadge(sale.status);
+            const statusBadge = getSaleStatusBadge(sale);
 
             return (
               <div

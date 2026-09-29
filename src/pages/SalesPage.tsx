@@ -16,7 +16,8 @@ import {
   Share2
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { formatCurrency, formatDate, getPaymentMethodLabel, getPaymentStatusBadge } from '../utils/formatters';
+import { getEffectiveSaleStatus } from '../utils/financeRules';
+import { formatCurrency, formatDate, getPaymentMethodLabel, getSaleStatusBadge } from '../utils/formatters';
 import { PaymentStatus } from '../types';
 
 export const SalesPage: React.FC<{ onOpenNewSale: () => void }> = ({ onOpenNewSale }) => {
@@ -37,7 +38,7 @@ export const SalesPage: React.FC<{ onOpenNewSale: () => void }> = ({ onOpenNewSa
 
     if (!matchesSearch) return false;
 
-    if (statusFilter !== 'todos' && sale.status !== statusFilter) {
+    if (statusFilter !== 'todos' && getEffectiveSaleStatus(sale) !== statusFilter) {
       return false;
     }
 
@@ -168,7 +169,7 @@ export const SalesPage: React.FC<{ onOpenNewSale: () => void }> = ({ onOpenNewSa
                 </tr>
               ) : (
                 filteredSales.map((sale) => {
-                  const statusBadge = getPaymentStatusBadge(sale.status);
+                  const statusBadge = getSaleStatusBadge(sale);
                   const isExpanded = selectedSaleDetail === sale.id;
 
                   return (

@@ -12,6 +12,7 @@ import {
   PackagePlus
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { isSaleOverdue } from '../../utils/financeRules';
 
 export const Header: React.FC<{ onOpenMobileMenu: () => void }> = ({ onOpenMobileMenu }) => {
   const { 
@@ -28,7 +29,7 @@ export const Header: React.FC<{ onOpenMobileMenu: () => void }> = ({ onOpenMobil
   const [showNotifications, setShowNotifications] = useState(false);
 
   // Notifications calculation
-  const overdueSales = sales.filter(s => s.status === 'atrasado');
+  const overdueSales = sales.filter(s => isSaleOverdue(s));
   const lowStockBatches = batches.filter(b => b.currentQuantity <= 30);
   const totalNotifs = overdueSales.length + lowStockBatches.length;
 

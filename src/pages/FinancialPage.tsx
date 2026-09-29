@@ -31,12 +31,17 @@ import {
   formatCurrency, 
   formatDate, 
   getDaysOverdue, 
-  getPaymentStatusBadge, 
+  getSaleStatusBadge, 
   getCommissionStatusBadge, 
   getPaymentMethodLabel 
 } from '../utils/formatters';
 import { FinancialTransaction, Sale, CommissionEntry } from '../types';
 import { RecordPaymentModal } from '../components/modals/RecordPaymentModal';
+import {
+  PeriodSelection, PeriodPreset, PERIOD_LABELS, FINANCIAL_PERIOD_OPTIONS,
+  getPeriodRange, getPeriodTitle, computePeriodResult, computeCurrentPosition,
+  getDaysUntilDue, isSaleActive, isSaleOverdue, isStockPurchase, isOperatingExpense, isCommissionPayment, isCountedEntry, isReversed,
+} from '../utils/financeRules';
 import { FinancialDetailDrawer, FinancialDrawerType } from '../components/financial/FinancialDetailDrawer';
 
 type FinancialTab = 'todos' | 'entradas' | 'saidas' | 'despesas' | 'comissoes' | 'receber';
@@ -46,7 +51,6 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
     financialTransactions, 
     deleteFinancialTransaction, 
     sales, 
-    batches, 
     commissions, 
     payCommission,
     setViewingReceiptSale,
@@ -67,23 +71,31 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
 
   const searchQuery = globalSearch || localSearch;
 
-  // -------------------------------------------------------------
-  // Global DRE Indicators (Balanço Geral do Atacado)
-  // -------------------------------------------------------------
-  const activeSales = sales.filter(s => s.status !== 'cancelado');
-  const totalSold = activeSales.reduce((acc, s) => acc + s.totalAmount, 0);
-  const totalCostOfGoodsSold = activeSales.reduce((acc, s) => acc + s.totalCost, 0);
-  const grossProfit = totalSold - totalCostOfGoodsSold;
+  const [periodSelection, setPeriodSelection] = useState<PeriodSelection>({ period: 'mes_atual' });
 
+  // -------------------------------------------------------------
+  // Balanço Geral do Atacado
+  // Resultado do Período (filtrado) + Posição Atual (fotografia de hoje)
+  // -------------------------------------------------------------
+  const periodRange = getPeriodRange(periodSelection);
+  const periodResult = computePeriodResult(sales, financialTransactions, periodRange.start, periodRange.end);
+  const currentPosition = computeCurrentPosition(sales, commissions);
+  const periodLabel = getPeriodTitle(periodSelection, periodRange);
+
+  // -------------------------------------------------------------
+  // Totais históricos usados pelas abas abaixo do card (sem filtro de período)
+  // -------------------------------------------------------------
+  const activeSales = sales.filter(isSaleActive);
   const totalReceived = activeSales.reduce((acc, s) => acc + s.paidAmount, 0);
-  const totalReceivable = activeSales.reduce((acc, s) => acc + s.remainingBalance, 0);
-  const totalOverdue = activeSales.filter(s => s.status === 'atrasado').reduce((acc, s) => acc + s.remainingBalance, 0);
+  const totalReceivable = currentPosition.saldoAReceber;
+  const totalOverdue = currentPosition.emAtraso;
 
-  // Stock purchases
-  const totalStockPurchased = batches.reduce((acc, b) => acc + (b.initialQuantity * b.unitCost), 0);
+  const totalStockPurchased = financialTransactions.filter(isStockPurchase).reduce((acc, f) => acc + f.amount, 0);
+  const stockPurchaseCount = financialTransactions.filter(isStockPurchase).length;
+  const totalCommissionPaymentsTx = financialTransactions.filter(isCommissionPayment).reduce((acc, f) => acc + f.amount, 0);
 
   // Manual operating expenses
-  const operatingExpensesList = financialTransactions.filter(f => f.type === 'saida' && !f.isAutomatic);
+  const operatingExpensesList = financialTransactions.filter(isOperatingExpense);
   const totalOperatingExpenses = operatingExpensesList.reduce((acc, f) => acc + f.amount, 0);
 
   // Fixed vs Variable expense categorization
@@ -97,20 +109,17 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
 
   // Commissions
   const totalCommissionsPaid = commissions.reduce((acc, c) => acc + c.paidCommission, 0);
-  const totalCommissionsPending = commissions
-    .filter(c => c.status === 'liberada' || c.status === 'parcialmente_liberada' || c.status === 'pendente')
-    .reduce((acc, c) => acc + (c.totalCommission - c.paidCommission), 0);
+  const totalCommissionsPending = currentPosition.comissoesPendentes;
   const totalCommissionGenerated = commissions.reduce((acc, c) => acc + c.totalCommission, 0);
-
-  // Lucro Líquido Estimado = Lucro Bruto - Despesas - Comissões Pagas
-  const estimatedNetProfit = grossProfit - totalOperatingExpenses - totalCommissionsPaid;
 
   // -------------------------------------------------------------
   // Entradas & Saídas Specific Lists
   // -------------------------------------------------------------
   const allEntries = financialTransactions.filter(f => f.type === 'entrada');
   const allOutflows = financialTransactions.filter(f => f.type === 'saida');
-  const totalEntriesAmount = allEntries.reduce((acc, f) => acc + f.amount, 0);
+  const countedEntries = allEntries.filter(isCountedEntry);
+  const totalEntriesAmount = countedEntries.reduce((acc, f) => acc + f.amount, 0);
+  const reversedEntriesAmount = allEntries.filter(isReversed).reduce((acc, f) => acc + f.amount, 0);
   const totalOutflowsAmount = allOutflows.reduce((acc, f) => acc + f.amount, 0);
 
   // -------------------------------------------------------------
@@ -119,19 +128,10 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
   const processedReceivables = activeSales.map(sale => {
     const isPaid = sale.remainingBalance <= 0;
     const daysOverdue = getDaysOverdue(sale.dueDate);
-    const isOverdue = !isPaid && daysOverdue > 0;
+    const isOverdue = isSaleOverdue(sale);
     
-    // Check if due within next 7 days
-    let isDueSoon = false;
-    if (!isPaid && !isOverdue && sale.dueDate) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const due = new Date(sale.dueDate);
-      const diffDays = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffDays >= 0 && diffDays <= 7) {
-        isDueSoon = true;
-      }
-    }
+    const daysUntilDue = getDaysUntilDue(sale.dueDate);
+    const isDueSoon = !isPaid && !isOverdue && daysUntilDue >= 0 && daysUntilDue <= 7;
 
     return {
       ...sale,
@@ -184,9 +184,9 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
         </button>
       </div>
 
-      {/* Main Financial DRE Overview Banner (Preserved Exactly) */}
-      <div className="bg-gradient-to-br from-slate-900 via-[#0a1538] to-blue-950 text-white rounded-3xl p-6 shadow-xl border border-slate-800 space-y-6">
-        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-white/10 pb-4">
+      {/* Balanço Geral do Atacado: Resultado do Período (filtrado) + Posição Atual (hoje) */}
+      <div className="bg-gradient-to-br from-slate-900 via-[#0a1538] to-blue-950 text-white rounded-3xl p-5 sm:p-6 shadow-xl border border-slate-800 space-y-6">
+        <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 border-b border-white/10 pb-4">
           <div>
             <span className="text-xs font-bold uppercase tracking-wider text-blue-300">
               DEMONSTRATIVO DE RESULTADO & LUCRO (DRE)
@@ -195,125 +195,171 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
               Balanço Geral do Atacado
             </h2>
           </div>
-          <div className="flex items-center gap-2 bg-blue-900/60 px-3.5 py-1.5 rounded-full border border-blue-400/30 text-xs text-blue-200 font-semibold self-start sm:self-auto">
-            <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-            <span>Cálculo Automático em Tempo Real</span>
+          <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+            <label className="relative flex items-center">
+              <span className="sr-only">Período do resultado</span>
+              <Calendar className="w-3.5 h-3.5 text-blue-300 absolute left-3 pointer-events-none" />
+              <select
+                value={periodSelection.period}
+                onChange={(e) => {
+                  const period = e.target.value as PeriodPreset;
+                  if (period === 'personalizado' && !periodSelection.customStart) {
+                    const t = new Date();
+                    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                    setPeriodSelection({ period, customStart: iso(new Date(t.getFullYear(), t.getMonth(), 1)), customEnd: iso(t) });
+                  } else {
+                    setPeriodSelection({ ...periodSelection, period });
+                  }
+                }}
+                className="appearance-none bg-blue-900/60 hover:bg-blue-900/80 border border-blue-400/30 rounded-full pl-8 pr-8 py-1.5 text-xs font-bold text-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer"
+              >
+                {FINANCIAL_PERIOD_OPTIONS.map(p => (
+                  <option key={p} value={p} className="text-slate-900">{PERIOD_LABELS[p]}</option>
+                ))}
+              </select>
+              <span className="absolute right-3 text-blue-300 text-[10px] pointer-events-none">▾</span>
+            </label>
+            <div className="hidden md:flex items-center gap-2 bg-blue-900/60 px-3.5 py-1.5 rounded-full border border-blue-400/30 text-xs text-blue-200 font-semibold">
+              <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+              <span>Cálculo Automático em Tempo Real</span>
+            </div>
           </div>
         </div>
 
-        {/* 4 Big Main KPI Tiles (Interactive Drill-Down) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          
-          {/* 1. Total Faturado */}
-          <div 
-            onClick={() => setDrillDownType('revenue')}
-            className="bg-white/5 border border-white/10 hover:border-blue-400/50 hover:bg-white/10 p-4 rounded-2xl backdrop-blur-sm transition-all duration-200 cursor-pointer group hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-slate-400 uppercase block">1. Total Faturado</span>
-              <span className="text-[10px] text-blue-400 font-bold opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
-                Ver detalhes →
-              </span>
-            </div>
-            <div className="text-2xl font-black text-white mt-1">{formatCurrency(totalSold)}</div>
-            <span className="text-[10px] text-slate-400 block mt-0.5">({formatCurrency(totalReceived)} já recebido em caixa)</span>
+        {periodSelection.period === 'personalizado' && (
+          <div className="flex flex-wrap items-center gap-2 -mt-2 text-xs">
+            <input
+              type="date"
+              value={periodSelection.customStart || ''}
+              onChange={(e) => setPeriodSelection({ ...periodSelection, customStart: e.target.value })}
+              className="bg-white/10 border border-white/15 rounded-xl px-3 py-1.5 font-semibold text-white [color-scheme:dark] focus:outline-none focus:ring-2 focus:ring-blue-400"
+            />
+            <span className="text-slate-400">até</span>
+            <input
+              type="date"
+              value={periodSelection.customEnd || ''}
+              onChange={(e) => setPeriodSelection({ ...periodSelection, customEnd: e.target.value })}
+              className="bg-white/10 border border-white/15 rounded-xl px-3 py-1.5 font-semibold text-white [color-scheme:dark] focus:outline-none focus:ring-2 focus:ring-blue-400"
+            />
           </div>
+        )}
 
-          {/* 2. Lucro Bruto */}
-          <div 
-            onClick={() => setDrillDownType('gross_profit')}
-            className="bg-white/5 border border-white/10 hover:border-emerald-400/50 hover:bg-white/10 p-4 rounded-2xl backdrop-blur-sm transition-all duration-200 cursor-pointer group hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-emerald-400 uppercase block">2. Lucro Bruto</span>
-              <span className="text-[10px] text-emerald-400 font-bold opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
-                Ver detalhes →
-              </span>
-            </div>
-            <div className="text-2xl font-black text-emerald-400 mt-1">{formatCurrency(grossProfit)}</div>
-            <span className="text-[10px] text-slate-400 block mt-0.5">Total Vendas - Custo Mercadorias</span>
-          </div>
-
-          {/* 3. Despesas + Comissões */}
-          <div 
-            onClick={() => setDrillDownType('expenses_commissions')}
-            className="bg-white/5 border border-white/10 hover:border-rose-400/50 hover:bg-white/10 p-4 rounded-2xl backdrop-blur-sm transition-all duration-200 cursor-pointer group hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-rose-400 uppercase block">3. Despesas + Comissões</span>
-              <span className="text-[10px] text-rose-400 font-bold opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
-                Ver detalhes →
-              </span>
-            </div>
-            <div className="text-2xl font-black text-rose-300 mt-1">
-              {formatCurrency(totalOperatingExpenses + totalCommissionsPaid)}
-            </div>
-            <span className="text-[10px] text-slate-400 block mt-0.5">
-              Despesas: {formatCurrency(totalOperatingExpenses)} • Comissões: {formatCurrency(totalCommissionsPaid)}
+        {/* A) RESULTADO DO PERÍODO */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-blue-300">
+              Resultado do Período <span className="text-white">— {periodLabel}</span>
             </span>
           </div>
 
-          {/* 4. Lucro Líquido Estimado */}
-          <div 
-            onClick={() => setDrillDownType('net_profit')}
-            className="bg-blue-600/90 border border-blue-400/50 hover:bg-blue-600 hover:border-blue-300 p-4 rounded-2xl backdrop-blur-sm shadow-blue-glow transition-all duration-200 cursor-pointer group hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-blue-100 uppercase block">4. Lucro Líquido Estimado</span>
-              <span className="text-[10px] text-white font-bold opacity-80 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
-                Ver composição →
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* 1. Total Faturado */}
+            <div
+              onClick={() => setDrillDownType('revenue')}
+              className="bg-white/5 border border-white/10 hover:border-blue-400/50 hover:bg-white/10 p-4 rounded-2xl backdrop-blur-sm transition-all duration-200 cursor-pointer group hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-400 uppercase block">1. Total Faturado</span>
+                <span className="text-[10px] text-blue-400 font-bold opacity-0 group-hover:opacity-100 transition-opacity">Ver detalhes →</span>
+              </div>
+              <div className="text-2xl font-black text-white mt-1">{formatCurrency(periodResult.vendas)}</div>
+              <span className="text-[10px] text-slate-400 block mt-0.5">{formatCurrency(periodResult.recebido)} já recebido dessas vendas</span>
+            </div>
+
+            {/* 2. Lucro Bruto */}
+            <div
+              onClick={() => setDrillDownType('gross_profit')}
+              className="bg-white/5 border border-white/10 hover:border-emerald-400/50 hover:bg-white/10 p-4 rounded-2xl backdrop-blur-sm transition-all duration-200 cursor-pointer group hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-emerald-400 uppercase block">2. Lucro Bruto</span>
+                <span className="text-[10px] text-emerald-400 font-bold opacity-0 group-hover:opacity-100 transition-opacity">Ver detalhes →</span>
+              </div>
+              <div className="text-2xl font-black text-emerald-400 mt-1">{formatCurrency(periodResult.lucroBruto)}</div>
+              <span className="text-[10px] text-slate-400 block mt-0.5">Vendas − custo das mercadorias vendidas</span>
+            </div>
+
+            {/* 3. Despesas + Comissões */}
+            <div
+              onClick={() => setDrillDownType('expenses_commissions')}
+              className="bg-white/5 border border-white/10 hover:border-rose-400/50 hover:bg-white/10 p-4 rounded-2xl backdrop-blur-sm transition-all duration-200 cursor-pointer group hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-rose-400 uppercase block">3. Despesas + Comissões</span>
+                <span className="text-[10px] text-rose-400 font-bold opacity-0 group-hover:opacity-100 transition-opacity">Ver detalhes →</span>
+              </div>
+              <div className="text-2xl font-black text-rose-300 mt-1">{formatCurrency(periodResult.despesas + periodResult.comissoes)}</div>
+              <span className="text-[10px] text-slate-400 block mt-0.5">
+                Despesas: {formatCurrency(periodResult.despesas)} • Comissões pagas: {formatCurrency(periodResult.comissoes)}
               </span>
             </div>
-            <div className="text-2xl font-black text-white mt-1">{formatCurrency(estimatedNetProfit)}</div>
-            <span className="text-[10px] text-blue-100 font-medium block mt-0.5">Lucro Real Líquido do Negócio</span>
+
+            {/* 4. Lucro Líquido */}
+            <div
+              onClick={() => setDrillDownType('net_profit')}
+              className="bg-blue-600/90 border border-blue-400/50 hover:bg-blue-600 hover:border-blue-300 p-4 rounded-2xl backdrop-blur-sm shadow-blue-glow transition-all duration-200 cursor-pointer group hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-blue-100 uppercase block">4. Lucro Líquido</span>
+                <span className="text-[10px] text-white font-bold opacity-80 group-hover:opacity-100 transition-opacity whitespace-nowrap">Ver composição →</span>
+              </div>
+              <div className={`text-2xl font-black mt-1 ${periodResult.lucroLiquido < 0 ? 'text-rose-200' : 'text-white'}`}>{formatCurrency(periodResult.lucroLiquido)}</div>
+              <span className="text-[10px] text-blue-100 font-medium block mt-0.5">Resultado de {periodLabel}</span>
+            </div>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setDrillDownType('stock_purchased')}
+            className="w-full sm:w-auto flex flex-wrap items-center gap-x-2 gap-y-0.5 text-left text-xs px-3 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all group"
+          >
+            <span className="text-slate-400 group-hover:text-slate-200">Compras de Estoque no Período:</span>
+            <strong className="text-slate-100">{formatCurrency(periodResult.comprasEstoque)}</strong>
+            <span className="text-[10px] text-slate-500">(saída de caixa — o custo entra no lucro quando o produto é vendido)</span>
+          </button>
         </div>
 
-        {/* Breakdown Row (Interactive Indicators) */}
-        <div className="pt-2 border-t border-white/10 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-          
-          <div 
-            onClick={() => setDrillDownType('stock_purchased')}
-            className="p-2.5 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all duration-150 cursor-pointer group"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400 block group-hover:text-slate-200 transition-colors">Estoque Comprado:</span>
-              <span className="text-[10px] text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+        {/* B) POSIÇÃO ATUAL */}
+        <div className="pt-4 border-t border-white/10 space-y-2">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-blue-300 block">
+            Posição Atual <span className="text-slate-400 normal-case font-semibold tracking-normal">· hoje, independente do período</span>
+          </span>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div
+              onClick={() => setDrillDownType('receivables')}
+              className="p-2.5 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all duration-150 cursor-pointer group"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400 block group-hover:text-amber-200 transition-colors">Saldo a Receber</span>
+                <span className="text-[10px] text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+              </div>
+              <strong className="text-amber-300 text-base block mt-0.5">{formatCurrency(currentPosition.saldoAReceber)}</strong>
+              <span className="text-[10px] text-slate-500">Saldo atual</span>
             </div>
-            <strong className="text-slate-200 text-sm block mt-0.5">{formatCurrency(totalStockPurchased)}</strong>
-          </div>
 
-          <div 
-            onClick={() => setDrillDownType('receivables')}
-            className="p-2.5 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all duration-150 cursor-pointer group"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400 block group-hover:text-amber-200 transition-colors">Saldo a Receber (Prazo):</span>
-              <span className="text-[10px] text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+            <div
+              onClick={() => setDrillDownType('overdue')}
+              className="p-2.5 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all duration-150 cursor-pointer group"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400 block group-hover:text-rose-200 transition-colors">Em Atraso / Vencido</span>
+                <span className="text-[10px] text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+              </div>
+              <strong className="text-rose-400 text-base block mt-0.5">{formatCurrency(currentPosition.emAtraso)}</strong>
+              <span className="text-[10px] text-slate-500">Valores vencidos atualmente</span>
             </div>
-            <strong className="text-amber-300 text-sm block mt-0.5">{formatCurrency(totalReceivable)}</strong>
-          </div>
 
-          <div 
-            onClick={() => setDrillDownType('overdue')}
-            className="p-2.5 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all duration-150 cursor-pointer group"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400 block group-hover:text-rose-200 transition-colors">Em Atraso (Vencido):</span>
-              <span className="text-[10px] text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+            <div
+              onClick={() => setDrillDownType('pending_commissions')}
+              className="p-2.5 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all duration-150 cursor-pointer group"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400 block group-hover:text-blue-200 transition-colors">Comissões Pendentes</span>
+                <span className="text-[10px] text-blue-300 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+              </div>
+              <strong className="text-blue-300 text-base block mt-0.5">{formatCurrency(currentPosition.comissoesPendentes)}</strong>
+              <span className="text-[10px] text-slate-500">Pendentes atualmente</span>
             </div>
-            <strong className="text-rose-400 text-sm block mt-0.5">{formatCurrency(totalOverdue)}</strong>
-          </div>
-
-          <div 
-            onClick={() => setDrillDownType('pending_commissions')}
-            className="p-2.5 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/10 transition-all duration-150 cursor-pointer group"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-slate-400 block group-hover:text-blue-200 transition-colors">Comissões Pendentes:</span>
-              <span className="text-[10px] text-blue-300 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
-            </div>
-            <strong className="text-blue-300 text-sm block mt-0.5">{formatCurrency(totalCommissionsPending)}</strong>
           </div>
         </div>
       </div>
@@ -428,8 +474,9 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
                     })
                     .map((tx) => {
                       const isEntry = tx.type === 'entrada';
+                      const reversed = isReversed(tx);
                       return (
-                        <tr key={tx.id} className="hover:bg-slate-50/70 transition-colors">
+                        <tr key={tx.id} className={`hover:bg-slate-50/70 transition-colors ${reversed ? 'opacity-60' : ''}`}>
                           <td className="p-3.5 font-bold text-slate-800">{formatDate(tx.date)}</td>
                           <td className="p-3.5">
                             <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -442,7 +489,10 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
                             </span>
                           </td>
                           <td className="p-3.5 font-semibold text-slate-700">{tx.categoryLabel}</td>
-                          <td className="p-3.5 font-medium text-slate-900 max-w-[320px] truncate">{tx.description}</td>
+                          <td className="p-3.5 font-medium text-slate-900 max-w-[320px]">
+                            <span className={`truncate block ${reversed ? 'line-through' : ''}`}>{tx.description}</span>
+                            {reversed && <ReversedBadge reason={tx.reversalReason} />}
+                          </td>
                           <td className="p-3.5 text-center">
                             <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
                               tx.isAutomatic ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
@@ -451,7 +501,7 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
                             </span>
                           </td>
                           <td className="p-3.5 text-right font-black text-sm">
-                            <span className={isEntry ? 'text-emerald-600' : 'text-slate-900'}>
+                            <span className={reversed ? 'text-slate-400 line-through' : isEntry ? 'text-emerald-600' : 'text-slate-900'}>
                               {isEntry ? '+' : '-'}{formatCurrency(tx.amount)}
                             </span>
                           </td>
@@ -491,7 +541,9 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
             <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-card">
               <span className="text-[11px] font-bold uppercase text-emerald-600">Total de Entradas</span>
               <div className="text-2xl font-black text-emerald-600 mt-0.5">{formatCurrency(totalEntriesAmount)}</div>
-              <span className="text-[10px] text-slate-400">Total acumulado de recebimentos</span>
+              <span className="text-[10px] text-slate-400">
+                Total acumulado de recebimentos{reversedEntriesAmount > 0 ? ` (sem ${formatCurrency(reversedEntriesAmount)} estornados)` : ''}
+              </span>
             </div>
 
             <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-card">
@@ -502,7 +554,7 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
 
             <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-card">
               <span className="text-[11px] font-bold uppercase text-slate-400">Quantidade de Lançamentos</span>
-              <div className="text-2xl font-black text-slate-900 mt-0.5">{allEntries.length} entradas</div>
+              <div className="text-2xl font-black text-slate-900 mt-0.5">{countedEntries.length} entradas</div>
               <span className="text-[10px] text-emerald-600 font-semibold">Fluxo de receita ativo</span>
             </div>
           </div>
@@ -565,20 +617,23 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
                       return true;
                     })
                     .map((tx) => (
-                      <tr key={tx.id} className="hover:bg-slate-50/70 transition-colors">
+                      <tr key={tx.id} className={`hover:bg-slate-50/70 transition-colors ${isReversed(tx) ? 'opacity-60' : ''}`}>
                         <td className="p-3.5 font-bold text-slate-800">{formatDate(tx.date)}</td>
                         <td className="p-3.5 font-semibold text-emerald-700">
                           <span className="bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
                             {tx.categoryLabel}
                           </span>
                         </td>
-                        <td className="p-3.5 font-medium text-slate-900">{tx.description}</td>
+                        <td className="p-3.5 font-medium text-slate-900">
+                          <span className={isReversed(tx) ? 'line-through' : ''}>{tx.description}</span>
+                          {isReversed(tx) && <ReversedBadge reason={tx.reversalReason} />}
+                        </td>
                         <td className="p-3.5 text-center">
                           <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md text-[10px] font-bold">
                             {tx.isAutomatic ? 'Automático' : 'Manual'}
                           </span>
                         </td>
-                        <td className="p-3.5 text-right font-black text-sm text-emerald-600">
+                        <td className={`p-3.5 text-right font-black text-sm ${isReversed(tx) ? 'text-slate-400 line-through' : 'text-emerald-600'}`}>
                           +{formatCurrency(tx.amount)}
                         </td>
                       </tr>
@@ -599,7 +654,7 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
           {/* Mini Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-card">
-              <span className="text-[11px] font-bold uppercase text-rose-600">Total de Saídas no Período</span>
+              <span className="text-[11px] font-bold uppercase text-rose-600">Total de Saídas (histórico)</span>
               <div className="text-2xl font-black text-rose-600 mt-0.5">{formatCurrency(totalOutflowsAmount)}</div>
               <span className="text-[10px] text-slate-400">Estoque + despesas + comissões</span>
             </div>
@@ -607,19 +662,19 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
             <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-card">
               <span className="text-[11px] font-bold uppercase text-slate-400">Compras de Estoque</span>
               <div className="text-xl font-black text-slate-900 mt-0.5">{formatCurrency(totalStockPurchased)}</div>
-              <span className="text-[10px] text-blue-600 font-semibold">{batches.length} lotes adquiridos</span>
+              <span className="text-[10px] text-blue-600 font-semibold">{stockPurchaseCount} compras registradas (histórico)</span>
             </div>
 
             <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-card">
               <span className="text-[11px] font-bold uppercase text-slate-400">Despesas Operacionais</span>
               <div className="text-xl font-black text-slate-900 mt-0.5">{formatCurrency(totalOperatingExpenses)}</div>
-              <span className="text-[10px] text-slate-400">Fretes, aluguel, salários, etc.</span>
+              <span className="text-[10px] text-slate-400">Fretes, aluguel, salários, etc. (histórico)</span>
             </div>
 
             <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-card">
               <span className="text-[11px] font-bold uppercase text-slate-400">Comissões Pagas</span>
-              <div className="text-xl font-black text-slate-900 mt-0.5">{formatCurrency(totalCommissionsPaid)}</div>
-              <span className="text-[10px] text-slate-400">Repasses aos representantes</span>
+              <div className="text-xl font-black text-slate-900 mt-0.5">{formatCurrency(totalCommissionPaymentsTx)}</div>
+              <span className="text-[10px] text-slate-400">Repasses aos representantes (histórico)</span>
             </div>
           </div>
 
@@ -1119,7 +1174,7 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
                       return true;
                     })
                     .map((sale) => {
-                      const badge = getPaymentStatusBadge(sale.status);
+                      const badge = getSaleStatusBadge(sale);
                       return (
                         <tr key={sale.id} className="hover:bg-slate-50/70 transition-colors">
                           <td className="p-3.5 font-extrabold text-slate-900">
@@ -1257,6 +1312,9 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
         isOpen={!!drillDownType}
         onClose={() => setDrillDownType(null)}
         initialType={drillDownType || 'revenue'}
+        periodStart={periodRange.start}
+        periodEnd={periodRange.end}
+        periodLabel={periodLabel}
         onOpenRecordPayment={(sale) => {
           setDrillDownType(null);
           setSaleForPayment(sale);
@@ -1275,3 +1333,12 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
     </div>
   );
 };
+
+const ReversedBadge: React.FC<{ reason?: string }> = ({ reason }) => (
+  <span
+    title={reason}
+    className="inline-block mt-0.5 bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-md text-[10px] font-bold no-underline"
+  >
+    Estornado{reason ? ` · ${reason}` : ''}
+  </span>
+);

@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
 import { Calendar, SlidersHorizontal, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { ReportsFilters, PeriodPreset, PERIOD_LABELS } from './reportsData';
+import { ReportsFilters, PERIOD_LABELS, REPORTS_PERIOD_OPTIONS } from './reportsData';
 import { PaymentMethod, PaymentStatus } from '../../types';
 import { getPaymentMethodLabel, getPaymentStatusBadge } from '../../utils/formatters';
 
-const PERIOD_OPTIONS: PeriodPreset[] = ['hoje', 'ontem', '7d', '30d', 'mes_atual', 'mes_anterior', 'personalizado'];
 const STATUS_OPTIONS: PaymentStatus[] = ['pago', 'parcialmente_pago', 'pendente', 'atrasado'];
 const PAYMENT_METHOD_OPTIONS: PaymentMethod[] = ['pix', 'dinheiro', 'transferencia', 'boleto', 'cheque', 'cartao'];
 
@@ -34,7 +33,7 @@ export const PeriodFilterBar: React.FC<PeriodFilterBarProps> = ({ filters, onCha
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         {/* Period Pills */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 flex-1">
-          {PERIOD_OPTIONS.map(p => (
+          {REPORTS_PERIOD_OPTIONS.map(p => (
             <button
               key={p}
               onClick={() => onChange({ ...filters, period: p })}

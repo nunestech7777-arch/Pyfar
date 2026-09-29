@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { toLocalISODate } from '../../utils/financeRules';
 import { X, PackagePlus, DollarSign, Calendar, Building2, CheckCircle } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { formatCurrency } from '../../utils/formatters';
@@ -12,11 +13,11 @@ export const NewBatchModal: React.FC<{ isOpen: boolean; onClose: () => void }> =
   const [initialQuantity, setInitialQuantity] = useState<number>(100);
   const [unitCost, setUnitCost] = useState<number>(300);
   const [supplier, setSupplier] = useState('');
-  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [entryDate, setEntryDate] = useState(() => toLocalISODate());
   const [expirationDate, setExpirationDate] = useState(() => {
     const d = new Date();
     d.setFullYear(d.getFullYear() + 1);
-    return d.toISOString().split('T')[0];
+    return toLocalISODate(d);
   });
   const [notes, setNotes] = useState('');
 

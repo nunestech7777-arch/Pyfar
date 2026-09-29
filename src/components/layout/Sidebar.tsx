@@ -18,6 +18,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { isSaleOverdue } from '../../utils/financeRules';
 import { NavigationModule } from '../../types';
 import { isDateExpired, isDateNearExpiry } from '../../utils/formatters';
 
@@ -37,7 +38,7 @@ export const Sidebar: React.FC<{ isOpenMobile: boolean; onCloseMobile: () => voi
   const { currentModule, setCurrentModule, logout, sales, batches, commissions } = useApp();
 
   // Badges calculations
-  const overdueCount = sales.filter(s => s.status === 'atrasado').length;
+  const overdueCount = sales.filter(s => isSaleOverdue(s)).length;
   const criticalStockCount = batches.filter(b => b.currentQuantity <= 20 || isDateExpired(b.expirationDate) || isDateNearExpiry(b.expirationDate)).length;
   const pendingCommissionsCount = commissions.filter(c => c.status === 'liberada').length;
 

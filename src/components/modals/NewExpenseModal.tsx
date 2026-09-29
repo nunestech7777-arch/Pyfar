@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { toLocalISODate } from '../../utils/financeRules';
 import { X, Receipt, CheckCircle, DollarSign } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { FinancialCategory } from '../../types';
@@ -9,7 +10,7 @@ export const NewExpenseModal: React.FC<{ isOpen: boolean; onClose: () => void }>
   const [category, setCategory] = useState<FinancialCategory>('frete');
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState<number>(0);
-  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(() => toLocalISODate());
 
   if (!isOpen) return null;
 

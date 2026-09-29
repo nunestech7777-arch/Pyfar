@@ -16,7 +16,10 @@ import {
 import { useApp } from '../context/AppContext';
 
 export const SettingsPage: React.FC = () => {
-  const { user, updateUser, resetAllData, addToast } = useApp();
+  const {
+    user, updateUser, resetAllData, addToast,
+    clients, batches, sales, commissioners, commissions, financialTransactions, payments, stockAdjustments,
+  } = useApp();
 
   const [name, setName] = useState(user.name);
   const [companyName, setCompanyName] = useState(user.companyName);
@@ -35,25 +38,28 @@ export const SettingsPage: React.FC = () => {
 
   const handleExportBackup = () => {
     const backupData = {
-      user: localStorage.getItem('vaxcontrol_user_v1'),
-      clients: localStorage.getItem('vaxcontrol_clients_v1'),
-      batches: localStorage.getItem('vaxcontrol_batches_v1'),
-      sales: localStorage.getItem('vaxcontrol_sales_v1'),
-      commissioners: localStorage.getItem('vaxcontrol_commissioners_v1'),
-      commissions: localStorage.getItem('vaxcontrol_commissions_v1'),
-      finances: localStorage.getItem('vaxcontrol_finances_v1'),
-      payments: localStorage.getItem('vaxcontrol_payments_v1'),
+      version: '2.0.0',
       exportedAt: new Date().toISOString(),
-      version: '1.0.0',
+      profile: user,
+      clients,
+      batches,
+      sales,
+      commissioners,
+      commissions,
+      finances: financialTransactions,
+      payments,
+      stockAdjustments,
     };
 
-    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(backupData, null, 2));
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
     const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute('download', `vaxcontrol_backup_${new Date().toISOString().split('T')[0]}.json`);
+    downloadAnchor.href = url;
+    downloadAnchor.download = `pyfar_backup_${new Date().toISOString().split('T')[0]}.json`;
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
+    URL.revokeObjectURL(url);
 
     addToast('success', 'Backup Exportado', 'Arquivo JSON de backup baixado com sucesso.');
   };

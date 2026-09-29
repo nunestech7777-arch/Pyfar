@@ -144,6 +144,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const applyUserData = (data: UserData, authUser: { id: string; email?: string }) => {
     const profile = data.profile ?? { ...initialUser, id: authUser.id, email: authUser.email ?? '' };
+    // O e-mail de login é gerenciado só no Supabase Auth; o perfil apenas o espelha.
+    if (authUser.email) profile.email = authUser.email;
     if (profile.name === 'Junior' || profile.name === 'Hazan') {
       profile.name = 'Hassan';
       profile.avatarUrl = '/hazan-avatar.jpg';

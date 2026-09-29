@@ -4,26 +4,24 @@ import {
   User, 
   Building2, 
   Save, 
-  RefreshCw, 
   Download, 
   Upload, 
   ShieldCheck, 
-  Database, 
   CheckCircle2, 
   Sparkles,
   Percent
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { AvatarUpload } from '../components/common/AvatarUpload';
 
 export const SettingsPage: React.FC = () => {
   const {
-    user, updateUser, resetAllData, addToast,
+    user, updateUser, addToast,
     clients, batches, sales, commissioners, commissions, financialTransactions, payments, stockAdjustments,
   } = useApp();
 
   const [name, setName] = useState(user.name);
   const [companyName, setCompanyName] = useState(user.companyName);
-  const [email, setEmail] = useState(user.email);
   const [avatarUrl, setAvatarUrl] = useState(user.avatarUrl || '');
 
   const handleSaveProfile = (e: React.FormEvent) => {
@@ -31,7 +29,6 @@ export const SettingsPage: React.FC = () => {
     updateUser({
       name,
       companyName,
-      email,
       avatarUrl: avatarUrl.trim() || undefined,
     });
   };
@@ -94,6 +91,17 @@ export const SettingsPage: React.FC = () => {
             </h3>
 
             <form onSubmit={handleSaveProfile} className="space-y-4">
+              <AvatarUpload
+                value={avatarUrl || undefined}
+                onChange={(dataUrl) => setAvatarUrl(dataUrl || '')}
+                onError={(message) => addToast('error', 'Foto não carregada', message)}
+              />
+              {avatarUrl !== (user.avatarUrl || '') && (
+                <p className="text-[11px] font-bold text-amber-600 -mt-2">
+                  Clique em "Salvar Alterações" para aplicar a nova foto.
+                </p>
+              )}
+
               <div>
                 <label className="block text-xs font-bold uppercase text-slate-700 mb-1.5">
                   Nome do Administrador / Dono
@@ -123,34 +131,6 @@ export const SettingsPage: React.FC = () => {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold uppercase text-slate-700 mb-1.5">
-                    E-mail de Acesso
-                  </label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold uppercase text-slate-700 mb-1.5">
-                    URL do Avatar / Foto
-                  </label>
-                  <input
-                    type="url"
-                    value={avatarUrl}
-                    onChange={(e) => setAvatarUrl(e.target.value)}
-                    placeholder="https://..."
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-
               <div className="pt-2">
                 <button
                   type="submit"
@@ -170,7 +150,7 @@ export const SettingsPage: React.FC = () => {
           {/* Backup & Demo Reset */}
           <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-card space-y-4">
             <h3 className="text-base font-bold text-slate-900 pb-2 border-b border-slate-100">
-              Backup e Restauração
+              Backup
             </h3>
 
             <p className="text-xs text-slate-600 leading-relaxed">
@@ -186,37 +166,6 @@ export const SettingsPage: React.FC = () => {
               <span>Baixar Backup Completo (JSON)</span>
             </button>
 
-            <div className="pt-3 border-t border-slate-100">
-              <span className="text-xs font-bold uppercase text-slate-700 block mb-1">
-                Zerar Todos os Dados
-              </span>
-              <p className="text-[11px] text-slate-500 mb-3">
-                Apaga permanentemente clientes, estoque, vendas, comissões e lançamentos financeiros desta conta. Baixe um backup antes.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  if (confirm('Tem certeza? Todos os dados desta conta serão apagados permanentemente.')) {
-                    resetAllData();
-                  }
-                }}
-                className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-all"
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>Zerar Todos os Dados</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Supabase Ready Architecture Badge */}
-          <div className="bg-gradient-to-br from-blue-950 to-slate-900 text-white p-5 rounded-3xl shadow-lg border border-slate-800 space-y-3">
-            <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs uppercase tracking-wider">
-              <Database className="w-4 h-4" />
-              <span>Arquitetura Pronta p/ Supabase</span>
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              O PYFAR foi projetado com entidades tipadas e camadas de serviço isoladas. A migração de LocalStorage para tabelas PostgreSQL no Supabase pode ser realizada conectando a API sem alterar componentes visuais.
-            </p>
           </div>
         </div>
       </div>

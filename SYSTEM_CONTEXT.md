@@ -100,7 +100,7 @@ src/
 │   ├── FinancialPage.tsx            # DRE summary, 6-tab financial navigation & drill-down
 │   ├── ReportsPage.tsx              # Reports container: period/filter state + 5-tab nav + drawer host
 │   ├── ReceiptsPage.tsx             # Receipt repository
-│   ├── SettingsPage.tsx             # Profile, company info, backup and "Zerar Todos os Dados"
+│   ├── SettingsPage.tsx             # Profile (name, company, avatar upload) and JSON backup; login e-mail/password and data reset are managed only in Supabase
 │   └── LoginPage.tsx                # Supabase Auth login (email/senha)
 └── pages/reports/                   # Reports data layer + tabs (see section 4.6 and 8.5)
     ├── reportsData.ts               # Pure functions: period ranges, filtering, per-product/per-lot aggregation

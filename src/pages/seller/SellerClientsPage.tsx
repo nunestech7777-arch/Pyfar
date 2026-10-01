@@ -5,8 +5,8 @@ import { SellerClient } from '../../types';
 import { SellerClientModal } from '../../components/seller/SellerClientModal';
 import { formatCurrency, formatDate, getSaleStatusBadge } from '../../utils/formatters';
 
-// Clientes da empresa (cadastrados pelo admin) + os do próprio vendedor, com o histórico das vendas
-// dele para cada um. Só edita os que ele cadastrou; sem exclusão (apenas o admin remove clientes).
+// Só os clientes cadastrados pelo próprio vendedor (filtrados no servidor) e o histórico das vendas
+// dele para cada um. Sem exclusão: apenas o admin remove clientes.
 export const SellerClientsPage: React.FC = () => {
   const { data } = useSeller();
   const [search, setSearch] = useState('');

@@ -323,3 +323,129 @@ export const computeCurrentPosition = (sales: Sale[], commissions: CommissionEnt
     pendingCommissions,
   };
 };
+
+// ============================================================================
+// SÉRIE DO GRÁFICO "EVOLUÇÃO DE VENDAS E LUCRO"
+// Só usa vendas reais (não canceladas). Nada de meses antes da primeira venda.
+// ============================================================================
+
+export type ChartScope = 'dia' | 'semana' | 'mes' | 'ano';
+
+export interface ChartPoint {
+  label: string;
+  tooltipLabel: string;
+  sales: number; // faturamento (soma de totalAmount)
+  profit: number; // lucro bruto (totalAmount - totalCost, custo gravado no momento da venda)
+}
+
+export interface ChartSeries {
+  points: ChartPoint[];
+  totalSales: number;
+  totalProfit: number;
+  prevSales: number;
+  prevProfit: number;
+  hasData: boolean;
+  rangeLabel: string;
+}
+
+const MONTH_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+const WEEKDAY_SHORT = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+// Início/fim do período do gráfico para uma data âncora e um escopo (semana começa na segunda).
+export const getChartRange = (anchor: Date, scope: ChartScope): { start: Date; end: Date } => {
+  const d = startOfDay(anchor);
+  if (scope === 'dia') return { start: d, end: endOfDay(d) };
+  if (scope === 'semana') {
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return { start: monday, end: endOfDay(sunday) };
+  }
+  if (scope === 'mes') {
+    return { start: new Date(d.getFullYear(), d.getMonth(), 1), end: endOfDay(new Date(d.getFullYear(), d.getMonth() + 1, 0)) };
+  }
+  return { start: new Date(d.getFullYear(), 0, 1), end: endOfDay(new Date(d.getFullYear(), 11, 31)) };
+};
+
+// Move a âncora para o período anterior (-1) ou seguinte (+1) do escopo.
+export const shiftChartAnchor = (anchor: Date, scope: ChartScope, dir: -1 | 1): Date => {
+  const d = new Date(anchor);
+  if (scope === 'dia') d.setDate(d.getDate() + dir);
+  else if (scope === 'semana') d.setDate(d.getDate() + 7 * dir);
+  else if (scope === 'mes') { d.setDate(1); d.setMonth(d.getMonth() + dir); }
+  else { d.setDate(1); d.setFullYear(d.getFullYear() + dir); }
+  return d;
+};
+
+const sumSales = (sales: Sale[]) => ({
+  sales: sales.reduce((a, s) => a + s.totalAmount, 0),
+  profit: sales.reduce((a, s) => a + (s.totalAmount - (s.totalCost ?? 0)), 0),
+});
+
+export const buildChartSeries = (
+  allSales: Sale[],
+  anchor: Date,
+  scope: ChartScope,
+  now: Date = new Date(),
+): ChartSeries => {
+  const active = allSales.filter(isSaleActive);
+  const { start, end } = getChartRange(anchor, scope);
+  const inRange = active.filter(s => isInRange(new Date(s.createdAt), start, end));
+
+  // Período anterior equivalente (dia→dia anterior, mês→mês anterior, ano→ano anterior...)
+  const prev = getChartRange(shiftChartAnchor(anchor, scope, -1), scope);
+  const prevSalesList = active.filter(s => isInRange(new Date(s.createdAt), prev.start, prev.end));
+  const prevTotals = sumSales(prevSalesList);
+  const totals = sumSales(inRange);
+
+  const points: ChartPoint[] = [];
+  const bucket = (idx: number, s: Sale) => {
+    points[idx].sales += s.totalAmount;
+    points[idx].profit += s.totalAmount - (s.totalCost ?? 0);
+  };
+
+  if (inRange.length > 0) {
+    if (scope === 'dia') {
+      for (let h = 0; h < 24; h++) points.push({ label: `${pad2(h)}h`, tooltipLabel: `${pad2(h)}h às ${pad2(h)}h59`, sales: 0, profit: 0 });
+      inRange.forEach(s => bucket(new Date(s.createdAt).getHours(), s));
+    } else if (scope === 'semana' || scope === 'mes') {
+      const days = Math.round((startOfDay(end).getTime() - start.getTime()) / MS_PER_DAY) + 1;
+      for (let i = 0; i < days; i++) {
+        const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        const dm = `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}`;
+        points.push({
+          label: scope === 'semana' ? WEEKDAY_SHORT[i] : pad2(d.getDate()),
+          tooltipLabel: `${WEEKDAY_SHORT[(d.getDay() + 6) % 7]}, ${dm}/${d.getFullYear()}`,
+          sales: 0, profit: 0,
+        });
+      }
+      inRange.forEach(s => bucket(Math.floor((startOfDay(new Date(s.createdAt)).getTime() - start.getTime()) / MS_PER_DAY + 0.5), s));
+    } else {
+      // Ano: começa no primeiro mês com venda real e termina no último mês com venda (ou no mês atual).
+      const months = inRange.map(s => new Date(s.createdAt).getMonth());
+      const first = Math.min(...months);
+      const last = start.getFullYear() === now.getFullYear() ? Math.max(Math.max(...months), now.getMonth()) : Math.max(...months);
+      for (let m = first; m <= last; m++) points.push({ label: MONTH_SHORT[m], tooltipLabel: `${MONTH_SHORT[m]} ${start.getFullYear()}`, sales: 0, profit: 0 });
+      inRange.forEach(s => bucket(new Date(s.createdAt).getMonth() - first, s));
+    }
+  }
+
+  const fmt = (d: Date) => `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+  const rangeLabel =
+    scope === 'dia' ? fmt(start)
+      : scope === 'semana' ? `${fmt(start)} a ${fmt(end)}`
+        : scope === 'mes' ? `${MONTH_SHORT[start.getMonth()]} ${start.getFullYear()}`
+          : String(start.getFullYear());
+
+  return {
+    points,
+    totalSales: totals.sales,
+    totalProfit: totals.profit,
+    prevSales: prevTotals.sales,
+    prevProfit: prevTotals.profit,
+    hasData: inRange.length > 0,
+    rangeLabel,
+  };
+};

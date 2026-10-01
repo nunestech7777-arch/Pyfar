@@ -3,35 +3,53 @@ import { formatCurrency } from '../../utils/formatters';
 
 interface DataPoint {
   label: string;
+  tooltipLabel?: string;
   sales: number;
   profit: number;
 }
 
 interface ChartAreaGradientProps {
-  data?: DataPoint[];
+  data: DataPoint[];
+  hasData?: boolean;
+  rangeLabel?: string;
+  totalSales?: number;
+  totalProfit?: number;
+  // Período anterior equivalente; sem ele o badge de crescimento não é exibido
+  prevSales?: number;
+  prevProfit?: number;
   title?: string;
 }
 
-export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({ 
-  data = [
-    { label: 'Jan', sales: 42000, profit: 9500 },
-    { label: 'Fev', sales: 38000, profit: 8200 },
-    { label: 'Mar', sales: 56000, profit: 14000 },
-    { label: 'Abr', sales: 49000, profit: 11200 },
-    { label: 'Mai', sales: 88000, profit: 24500 },
-    { label: 'Jun', sales: 72000, profit: 19800 },
-    { label: 'Jul', sales: 95000, profit: 28000 },
-    { label: 'Ago', sales: 110000, profit: 34000 },
-    { label: 'Set', sales: 148000, profit: 46000 },
-  ],
+// Eixo Y: 1500 → "1,5k", 250000 → "250k", 800 → "800"
+const formatAxis = (v: number): string => {
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1).replace('.', ',').replace(',0', '')}M`;
+  if (v >= 1000) return `${(v / 1000).toFixed(v >= 10_000 ? 0 : 1).replace('.', ',').replace(',0', '')}k`;
+  return String(Math.round(v));
+};
+
+export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({
+  data,
+  hasData = data.length > 0,
+  rangeLabel,
+  totalSales = data.reduce((a, d) => a + d.sales, 0),
+  totalProfit = data.reduce((a, d) => a + d.profit, 0),
+  prevSales,
+  prevProfit,
   title = 'Evolução de Vendas e Lucro'
 }) => {
   const [metric, setMetric] = useState<'sales' | 'profit'>('sales');
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
   const values = data.map(d => metric === 'sales' ? d.sales : d.profit);
-  const maxVal = Math.max(...values, 1000) * 1.15;
+  const maxVal = (Math.max(...values, 0) || 1000) * 1.15;
   const minVal = 0;
+
+  // Crescimento real: período atual vs. período anterior equivalente
+  const current = metric === 'sales' ? totalSales : totalProfit;
+  const previous = metric === 'sales' ? prevSales : prevProfit;
+  const showGrowth = previous !== undefined;
+  const growth = previous !== undefined && previous > 0 ? ((current - previous) / previous) * 100 : null;
+  const growthText = growth === null ? 'Sem comparação' : `${growth >= 0 ? '+' : ''}${growth.toFixed(1).replace('.', ',')}%`;
 
   // SVG Chart Geometry
   const width = 600;
@@ -44,7 +62,7 @@ export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({
 
   const points = data.map((d, i) => {
     const val = metric === 'sales' ? d.sales : d.profit;
-    const x = paddingX + (i / (data.length - 1)) * chartWidth;
+    const x = paddingX + (data.length > 1 ? i / (data.length - 1) : 0.5) * chartWidth;
     const y = height - paddingY - ((val - minVal) / (maxVal - minVal)) * chartHeight;
     return { x, y, val, label: d.label, raw: d };
   });
@@ -70,18 +88,20 @@ export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({
   };
 
   const linePath = generateSmoothPath(points);
-  const areaPath = `${linePath} L ${points[points.length - 1].x} ${height - paddingY} L ${points[0].x} ${height - paddingY} Z`;
+  const areaPath = points.length > 1
+    ? `${linePath} L ${points[points.length - 1].x} ${height - paddingY} L ${points[0].x} ${height - paddingY} Z`
+    : '';
 
-  // Find peak index
-  const peakIdx = values.indexOf(Math.max(...values));
-  const peakPoint = points[peakIdx];
+  const lastPoint = points[points.length - 1];
+  // Com muitos pontos (dia/mês), mostra só alguns rótulos no eixo X
+  const labelStep = points.length > 12 ? Math.ceil(points.length / 8) : 1;
 
   return (
     <div className="bg-white rounded-2xl p-5 border border-slate-100 shadow-card flex flex-col justify-between">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
         <div>
           <h3 className="text-sm font-bold text-slate-900 tracking-tight">{title}</h3>
-          <p className="text-xs text-slate-500">Histórico de faturamento do atacado</p>
+          <p className="text-xs text-slate-500">{metric === 'sales' ? 'Faturamento' : 'Lucro bruto'}{rangeLabel ? ` · ${rangeLabel}` : ' no período'}</p>
         </div>
 
         {/* Switcher */}
@@ -109,8 +129,14 @@ export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({
         </div>
       </div>
 
+      {!hasData && (
+        <div className="flex items-center justify-center min-h-[200px] mt-2 rounded-2xl bg-slate-50 border border-dashed border-slate-200 text-sm font-medium text-slate-500">
+          Nenhuma venda encontrada neste período.
+        </div>
+      )}
+
       {/* SVG Canvas */}
-      <div className="relative w-full aspect-[2.4/1] min-h-[200px] mt-2">
+      {hasData && <div className="relative w-full aspect-[2.4/1] min-h-[200px] mt-2">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full overflow-visible">
           <defs>
             {/* Rich gradient matching reference image */}
@@ -147,9 +173,7 @@ export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({
                   fill="#94a3b8"
                   fontWeight="600"
                 >
-                  {metric === 'sales'
-                    ? `${Math.round((maxVal * pct) / 1000)}k`
-                    : `${Math.round((maxVal * pct) / 1000)}k`}
+                  {formatAxis(maxVal * pct)}
                 </text>
               </g>
             );
@@ -169,27 +193,12 @@ export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({
             filter="url(#shadowGlow)"
           />
 
-          {/* Peak badge just like in reference image */}
-          {peakPoint && (
-            <g transform={`translate(${peakPoint.x}, ${peakPoint.y - 12})`}>
-              <rect
-                x="-32"
-                y="-18"
-                width="64"
-                height="20"
-                rx="10"
-                fill="#1e40af"
-                className="shadow-sm"
-              />
-              <text
-                x="0"
-                y="-4"
-                textAnchor="middle"
-                fontSize="10"
-                fontWeight="700"
-                fill="#ffffff"
-              >
-                +48.5%
+          {/* Crescimento vs. período anterior equivalente */}
+          {showGrowth && lastPoint && (
+            <g transform={`translate(${Math.min(lastPoint.x, width - 48)}, ${Math.max(lastPoint.y - 12, 22)})`}>
+              <rect x="-48" y="-18" width="96" height="20" rx="10" fill={growth !== null && growth < 0 ? '#be123c' : '#1e40af'} />
+              <text x="0" y="-4" textAnchor="middle" fontSize="10" fontWeight="700" fill="#ffffff">
+                {growthText}
               </text>
             </g>
           )}
@@ -232,7 +241,7 @@ export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({
                   fontWeight={isHovered ? '700' : '500'}
                   fill={isHovered ? '#1d4ed8' : '#64748b'}
                 >
-                  {pt.label}
+                  {(i % labelStep === 0 || isHovered) ? pt.label : ''}
                 </text>
               </g>
             );
@@ -240,7 +249,7 @@ export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({
         </svg>
 
         {/* Tooltip Overlay */}
-        {hoveredIdx !== null && (
+        {hoveredIdx !== null && points[hoveredIdx] && (
           <div
             className="absolute bg-slate-900 text-white text-xs px-3 py-1.5 rounded-xl shadow-xl pointer-events-none transform -translate-x-1/2 -translate-y-full transition-all z-20"
             style={{
@@ -248,14 +257,14 @@ export const ChartAreaGradient: React.FC<ChartAreaGradientProps> = ({
               top: `${(points[hoveredIdx].y / height) * 100 - 15}%`,
             }}
           >
-            <div className="font-bold text-blue-300">{points[hoveredIdx].label} 2026</div>
+            <div className="font-bold text-blue-300">{points[hoveredIdx].raw.tooltipLabel ?? points[hoveredIdx].label}</div>
             <div className="text-[11px] font-medium text-white">
-              {metric === 'sales' ? 'Vendas: ' : 'Lucro: '}
+              {metric === 'sales' ? 'Faturamento: ' : 'Lucro bruto: '}
               {formatCurrency(points[hoveredIdx].val)}
             </div>
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 };

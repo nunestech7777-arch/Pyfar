@@ -18,7 +18,7 @@ import {
   PiggyBank
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { getPeriodRange, computePeriodResult, computeCurrentPosition } from '../utils/financeRules';
+import { getPeriodRange, computePeriodResult, computeCurrentPosition, buildChartSeries, type ChartScope } from '../utils/financeRules';
 import { StatCard } from '../components/common/StatCard';
 import { ChartAreaGradient } from '../components/common/ChartAreaGradient';
 import { DonutChart, DistributionBars } from '../components/common/DonutChart';
@@ -39,6 +39,11 @@ export const DashboardPage: React.FC<{
     setCurrentModule, 
     setViewingReceiptSale 
   } = useApp();
+
+  // Filtro de atividade: período oficial que alimenta o gráfico de evolução
+  const [chartAnchor, setChartAnchor] = useState<Date>(() => new Date());
+  const [chartScope, setChartScope] = useState<ChartScope>('ano');
+  const chartSeries = buildChartSeries(sales, chartAnchor, chartScope);
 
   // Metrics Calculations
   // 1. Total em estoque (doses) e Valor total em estoque (R$)
@@ -288,10 +293,22 @@ export const DashboardPage: React.FC<{
         <div className="lg:col-span-7 space-y-6">
           
           {/* Main Area Chart */}
-          <ChartAreaGradient />
+          <ChartAreaGradient
+            data={chartSeries.points}
+            hasData={chartSeries.hasData}
+            rangeLabel={chartSeries.rangeLabel}
+            totalSales={chartSeries.totalSales}
+            totalProfit={chartSeries.totalProfit}
+            prevSales={chartSeries.prevSales}
+            prevProfit={chartSeries.prevProfit}
+          />
 
           {/* Calendar Week Day Selector Strip from reference image */}
-          <CalendarWeekStrip />
+          <CalendarWeekStrip
+            anchor={chartAnchor}
+            scope={chartScope}
+            onChange={(anchor, scope) => { setChartAnchor(anchor); setChartScope(scope); }}
+          />
         </div>
 
         {/* Right Column (5 cols): Top Product Sale Donut + Traffic / Client Distribution */}

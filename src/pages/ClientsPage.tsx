@@ -177,6 +177,11 @@ export const ClientsPage: React.FC<{
                     ) : (
                       <span className="text-[11px] text-slate-400 italic">Sem loja cadastrada</span>
                     )}
+                    {client.sellerName && (
+                      <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                        Cadastrado pelo vendedor {client.sellerName}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1">

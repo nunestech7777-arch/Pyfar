@@ -1,5 +1,5 @@
-import type { Sale } from '../types';
 import { getDaysOverdue as getDaysOverdueRule, getEffectiveSaleStatus } from './financeRules';
+import type { SaleStatusFields } from './financeRules';
 
 export const formatCurrency = (value: number | undefined | null): string => {
   if (value === undefined || value === null || isNaN(value)) return 'R$ 0,00';
@@ -85,7 +85,7 @@ export const getPaymentStatusBadge = (status: string) => {
 };
 
 // Badge de uma venda pelo status calculado (vencimento/valores), não pelo status gravado.
-export const getSaleStatusBadge = (sale: Sale) => getPaymentStatusBadge(getEffectiveSaleStatus(sale));
+export const getSaleStatusBadge = (sale: SaleStatusFields) => getPaymentStatusBadge(getEffectiveSaleStatus(sale));
 
 export const getCommissionStatusBadge = (status: string) => {
   switch (status) {

@@ -15,21 +15,32 @@ import {
   StockAdjustmentType,
   StockAdjustmentReason,
   User,
+  AccessRole,
   ToastMessage,
   PaymentMethod,
   FinancialCategory
 } from '../types';
 import { supabase } from '../services/supabase';
 import { cloudStorage, emptyUserData, UserData } from '../services/cloudStorage';
+import { sellerApi } from '../services/sellerApi';
+import { mergeUserData, isSameUserData } from '../utils/syncMerge';
 import { initialUser } from '../data/initialData';
+
+// Telas que o perfil vendedor pode abrir no layout administrativo: nenhuma. O vendedor usa o
+// SellerLayout, e os dados dele vêm só das funções seller_* do servidor.
+export const PERMISSION_DENIED_MESSAGE = 'Você não tem permissão para acessar esta área.';
 
 interface AppContextType {
   user: User;
+  // Perfil de acesso vindo do servidor (public.seller_profiles). null enquanto não há sessão.
+  accessRole: AccessRole | null;
   isLoggedIn: boolean;
   isLoadingSession: boolean;
   login: (email: string, password: string) => Promise<string | null>;
   logout: () => void;
   updateUser: (data: Partial<User>) => void;
+  // Nome exibido do vendedor (vem de seller_profiles); sem toast.
+  updateUserName: (name: string) => void;
   
   currentModule: NavigationModule;
   setCurrentModule: (mod: NavigationModule) => void;
@@ -126,7 +137,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [user, setUserState] = useState<User>(initialUser);
   const [isLoggedIn, setIsLoggedInState] = useState<boolean>(false);
   const [isLoadingSession, setIsLoadingSession] = useState<boolean>(true);
-  const [currentModule, setCurrentModule] = useState<NavigationModule>('dashboard');
+  const [accessRole, setAccessRole] = useState<AccessRole | null>(null);
+  const [currentModule, setCurrentModuleState] = useState<NavigationModule>('dashboard');
   const [globalSearch, setGlobalSearch] = useState<string>('');
 
   const [clients, setClientsState] = useState<Client[]>([]);
@@ -144,9 +156,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ID do usuário cujos dados já foram carregados do Supabase.
   // Enquanto for null, nada é salvo (evita sobrescrever a nuvem com o estado vazio inicial).
   const loadedUserIdRef = useRef<string | null>(null);
+  // Sessão já tratada (admin ou vendedor), para não recarregar a cada evento de auth.
+  const sessionUserIdRef = useRef<string | null>(null);
+  const accessRoleRef = useRef<AccessRole | null>(null);
+
+  // Sincronização com o servidor (só admin). baseDataRef = último estado lido/gravado no servidor,
+  // versionRef = sua versão. Vendedores gravam direto no servidor; com isso a gravação do admin
+  // detecta a mudança e mescla em vez de sobrescrever (ver utils/syncMerge.ts).
+  const baseDataRef = useRef<UserData>(emptyUserData());
+  const versionRef = useRef<number | null>(null);
+  const syncQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Evita repetir o aviso de erro a cada nova tentativa enquanto o servidor estiver falhando.
+  const saveErrorShownRef = useRef(false);
+  const latestDataRef = useRef<UserData>(emptyUserData());
+  latestDataRef.current = {
+    profile: user,
+    clients,
+    batches,
+    sales,
+    commissioners,
+    commissions,
+    finances: financialTransactions,
+    payments,
+    stockAdjustments,
+  };
+
+  const setCollections = (data: UserData) => {
+    setClientsState(data.clients);
+    setBatchesState(data.batches);
+    setSalesState(data.sales);
+    setCommissionersState(data.commissioners);
+    setCommissionsState(data.commissions);
+    setFinancialTransactionsState(data.finances);
+    setPaymentsState(data.payments);
+    setStockAdjustmentsState(data.stockAdjustments);
+  };
+
+  // Navegação protegida: o vendedor nunca abre telas administrativas.
+  const setCurrentModule = (mod: NavigationModule) => {
+    if (accessRoleRef.current !== 'admin') {
+      addToast('error', 'Acesso negado', PERMISSION_DENIED_MESSAGE);
+      return;
+    }
+    setCurrentModuleState(mod);
+  };
 
   const applyUserData = (data: UserData, authUser: { id: string; email?: string }) => {
-    const profile = data.profile ?? { ...initialUser, id: authUser.id, email: authUser.email ?? '' };
+    // Cópia: data.profile também é a base da sincronização e não pode ser alterado aqui.
+    const profile = data.profile ? { ...data.profile } : { ...initialUser, id: authUser.id, email: authUser.email ?? '' };
     // O e-mail de login é gerenciado só no Supabase Auth; o perfil apenas o espelha.
     if (authUser.email) profile.email = authUser.email;
     if (profile.name === 'Junior' || profile.name === 'Hazan') {
@@ -171,18 +228,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleSession = async (authUser: { id: string; email?: string } | null) => {
       if (!authUser) {
         loadedUserIdRef.current = null;
+        sessionUserIdRef.current = null;
+        accessRoleRef.current = null;
+        baseDataRef.current = emptyUserData();
+        versionRef.current = null;
+        saveErrorShownRef.current = false;
+        setAccessRole(null);
         applyUserData(emptyUserData(), { id: '', email: '' });
         setIsLoggedInState(false);
         setIsLoadingSession(false);
         return;
       }
-      if (loadedUserIdRef.current === authUser.id) return;
+      if (sessionUserIdRef.current === authUser.id) return;
 
       setIsLoadingSession(true);
       try {
-        const data = await cloudStorage.load(authUser.id);
-        applyUserData(data, authUser);
-        loadedUserIdRef.current = authUser.id;
+        const role = await sellerApi.getAccessRole(authUser.id);
+
+        if (role === 'vendedor') {
+          // Vendedor: não carrega nem grava public.user_data (o servidor também bloqueia).
+          // Os dados dele vêm do SellerContext via seller_get_data().
+          loadedUserIdRef.current = null;
+          applyUserData(emptyUserData(), authUser);
+          setUserState({
+            id: authUser.id,
+            name: 'Vendedor',
+            email: authUser.email ?? '',
+            role: 'vendedor',
+            companyName: initialUser.companyName,
+          });
+        } else {
+          const { data, version } = await cloudStorage.load(authUser.id);
+          baseDataRef.current = data;
+          versionRef.current = version;
+          applyUserData(data, authUser);
+          loadedUserIdRef.current = authUser.id;
+          setCurrentModuleState('dashboard');
+        }
+
+        sessionUserIdRef.current = authUser.id;
+        accessRoleRef.current = role;
+        setAccessRole(role);
         setIsLoggedInState(true);
       } catch (err) {
         console.error(err);
@@ -202,32 +288,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Operações de sincronização em fila (uma gravação/leitura por vez).
+  const runExclusive = (task: () => Promise<void>): Promise<void> => {
+    const next = syncQueueRef.current.then(task);
+    syncQueueRef.current = next.catch(() => undefined);
+    return next;
+  };
+
+  // Lê o servidor e mescla com o que está na tela (mudanças locais preservadas).
+  const reconcileWithServer = async (userId: string) => {
+    const remote = await cloudStorage.load(userId);
+    if (loadedUserIdRef.current !== userId) return;
+    // Sem linha no servidor (apagada ou oculta pela RLS): não mesclar contra "vazio", o que
+    // apagaria tudo da tela e depois do banco.
+    if (!remote.exists) throw new Error('Dados da conta não encontrados no servidor.');
+    const { data: merged, oversold } = mergeUserData(baseDataRef.current, latestDataRef.current, remote.data);
+    baseDataRef.current = remote.data;
+    versionRef.current = remote.version;
+    oversold.forEach(b => addToast(
+      'warning',
+      'Estoque vendido em duplicidade',
+      `${b.vaccineName} (Lote ${b.lotNumber}): uma venda sua e uma de vendedor usaram o mesmo saldo ao mesmo tempo. O lote ficou zerado — confira o estoque físico e ajuste se necessário.`
+    ));
+    if (!isSameUserData(merged, latestDataRef.current)) {
+      latestDataRef.current = merged;
+      setCollections(merged);
+    }
+  };
+
+  const syncToServer = (userId: string) =>
+    runExclusive(async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (loadedUserIdRef.current !== userId) return;
+        const payload = latestDataRef.current;
+        if (isSameUserData(payload, baseDataRef.current)) return;
+        const result = await cloudStorage.save(userId, payload, versionRef.current);
+        if (result.status === 'saved') {
+          baseDataRef.current = payload;
+          versionRef.current = result.version;
+          saveErrorShownRef.current = false;
+          return;
+        }
+        // Um vendedor gravou no meio do caminho: mescla e tenta de novo.
+        await reconcileWithServer(userId);
+      }
+      throw new Error('Conflito de gravação persistente.');
+    }).catch(err => {
+      console.error(err);
+      if (saveErrorShownRef.current) return;
+      saveErrorShownRef.current = true;
+      addToast('error', 'Erro ao salvar', 'As últimas alterações não foram salvas no servidor. O sistema tentará de novo automaticamente.');
+    });
+
   // Sync with Supabase (debounce para agrupar alterações em sequência)
   useEffect(() => {
     const userId = loadedUserIdRef.current;
     if (!userId) return;
 
-    const timer = setTimeout(() => {
-      cloudStorage
-        .save(userId, {
-          profile: user,
-          clients,
-          batches,
-          sales,
-          commissioners,
-          commissions,
-          finances: financialTransactions,
-          payments,
-          stockAdjustments,
-        })
-        .catch(err => {
-          console.error(err);
-          addToast('error', 'Erro ao salvar', 'As últimas alterações não foram salvas no servidor.');
-        });
-    }, 600);
+    const timer = setTimeout(() => syncToServer(userId), 600);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, clients, batches, sales, commissioners, commissions, financialTransactions, payments, stockAdjustments]);
+
+  // Admin: traz vendas/clientes lançados por vendedores (a cada 20 s e ao voltar para a aba).
+  useEffect(() => {
+    if (accessRole !== 'admin' || !isLoggedIn) return;
+    const check = () => {
+      const userId = loadedUserIdRef.current;
+      if (!userId || document.visibilityState === 'hidden') return;
+      // Alterações locais que ficaram sem salvar (erro de rede ou conflitos seguidos): tenta de novo.
+      if (!isSameUserData(latestDataRef.current, baseDataRef.current)) {
+        syncToServer(userId);
+        return;
+      }
+      if (versionRef.current === null) return;
+      runExclusive(async () => {
+        const version = await cloudStorage.loadVersion(userId);
+        if (version === null || version === versionRef.current) return;
+        await reconcileWithServer(userId);
+      }).catch(err => console.error('[sync] Falha ao verificar atualizações:', err));
+    };
+    const interval = setInterval(check, 20000);
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessRole, isLoggedIn]);
 
   const addToast = (type: ToastMessage['type'], title: string, message: string) => {
     const id = 't-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4);
@@ -243,7 +393,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const login = async (email: string, password: string): Promise<string | null> => {
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      const typedEmail = email.trim();
+      let { error } = await supabase.auth.signInWithPassword({ email: typedEmail, password });
+      // E-mails com acento (ex.: "Zémario...") podem ter sido cadastrados sem acento no Supabase.
+      const plainEmail = typedEmail.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (error && plainEmail !== typedEmail) {
+        ({ error } = await supabase.auth.signInWithPassword({ email: plainEmail, password }));
+      }
       if (error) {
         console.error('[login] Supabase respondeu com erro:', error);
         return error.message === 'Invalid login credentials'
@@ -264,13 +420,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.error('[logout] Falha ao encerrar sessão no servidor:', err);
     }
-    setCurrentModule('dashboard');
+    setCurrentModuleState('dashboard');
     addToast('info', 'Sessão finalizada', 'Você saiu do sistema PYFAR.');
   };
 
   const updateUser = (data: Partial<User>) => {
     setUserState(prev => ({ ...prev, ...data }));
     addToast('success', 'Perfil atualizado', 'Configurações de usuário salvas com sucesso.');
+  };
+
+  const updateUserName = (name: string) => {
+    setUserState(prev => (prev.name === name ? prev : { ...prev, name }));
   };
 
   // CLIENTS
@@ -543,7 +703,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const saleId = 'sal-' + Date.now();
-    const saleNumber = `VEN-${new Date().getFullYear()}-${String(sales.length + 1).padStart(3, '0')}`;
+    // Quantidade de vendas + 1, sem repetir número já usado no ano (vendas excluídas ou lançadas
+    // por vendedores). Mesma regra de seller_create_sale (migration 003).
+    const saleYear = new Date().getFullYear();
+    const usedNumbers = sales
+      .map(s => new RegExp(`^VEN-${saleYear}-(\\d+)$`).exec(s.saleNumber))
+      .map(m => (m ? Number(m[1]) : 0));
+    const saleNumber = `VEN-${saleYear}-${String(Math.max(sales.length, ...usedNumbers) + 1).padStart(3, '0')}`;
 
     const newSale: Sale = {
       id: saleId,
@@ -980,11 +1146,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider
       value={{
         user,
+        accessRole,
         isLoggedIn,
         isLoadingSession,
         login,
         logout,
         updateUser,
+        updateUserName,
         currentModule,
         setCurrentModule,
         globalSearch,

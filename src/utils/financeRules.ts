@@ -144,7 +144,10 @@ export const FINANCIAL_PERIOD_OPTIONS: PeriodPreset[] = ['mes_atual', 'mes_anter
 // VENDAS: status efetivo (fonte única para "vencido")
 // ============================================================================
 
-export const isSaleActive = (sale: Sale): boolean => sale.status !== 'cancelado';
+// Campos usados no cálculo de status (compartilhado com a visão do vendedor, que não tem custo).
+export type SaleStatusFields = Pick<Sale, 'status' | 'remainingBalance' | 'dueDate' | 'paidAmount'>;
+
+export const isSaleActive = (sale: Pick<Sale, 'status'>): boolean => sale.status !== 'cancelado';
 
 export const getDaysOverdue = (dueDate: string | undefined, now: Date = new Date()): number => {
   if (!dueDate) return 0;
@@ -159,12 +162,12 @@ export const getDaysUntilDue = (dueDate: string | undefined, now: Date = new Dat
 };
 
 // Conta vencida = venda não cancelada, com saldo em aberto e vencimento anterior a hoje.
-export const isSaleOverdue = (sale: Sale, now: Date = new Date()): boolean =>
+export const isSaleOverdue = (sale: SaleStatusFields, now: Date = new Date()): boolean =>
   isSaleActive(sale) && sale.remainingBalance > 0 && getDaysOverdue(sale.dueDate, now) > 0;
 
 // Status calculado na hora, a partir dos valores e do vencimento. O `sale.status` gravado só é
 // atualizado ao criar a venda ou registrar pagamento, então fica desatualizado quando o prazo vence.
-export const getEffectiveSaleStatus = (sale: Sale, now: Date = new Date()): PaymentStatus => {
+export const getEffectiveSaleStatus = (sale: SaleStatusFields, now: Date = new Date()): PaymentStatus => {
   if (!isSaleActive(sale)) return 'cancelado';
   if (sale.remainingBalance <= 0) return 'pago';
   if (isSaleOverdue(sale, now)) return 'atrasado';

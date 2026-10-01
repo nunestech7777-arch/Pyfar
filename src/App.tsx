@@ -1,10 +1,12 @@
 import React from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { AppLayout } from './components/layout/AppLayout';
+import { SellerProvider } from './context/SellerContext';
+import { SellerLayout } from './components/seller/SellerLayout';
 import { LoginPage } from './pages/LoginPage';
 
 const MainRouter: React.FC = () => {
-  const { isLoggedIn, isLoadingSession } = useApp();
+  const { isLoggedIn, isLoadingSession, accessRole } = useApp();
 
   if (isLoadingSession) {
     return (
@@ -20,6 +22,17 @@ const MainRouter: React.FC = () => {
   if (!isLoggedIn) {
     return <LoginPage />;
   }
+
+  // Vendedor: layout próprio (sem nenhuma página administrativa). Admin: sistema completo.
+  if (accessRole === 'vendedor') {
+    return (
+      <SellerProvider>
+        <SellerLayout />
+      </SellerProvider>
+    );
+  }
+
+  if (accessRole !== 'admin') return null;
 
   return <AppLayout />;
 };

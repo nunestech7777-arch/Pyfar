@@ -17,7 +17,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  role: 'admin' | 'operador';
+  role: 'admin' | 'operador' | 'vendedor';
   avatarUrl?: string;
   companyName: string;
 }
@@ -34,6 +34,9 @@ export interface Client {
   commissionerId?: string; // Opcional (Comissionador vinculado)
   status: 'ativo' | 'inativo';
   createdAt: string;
+  // Vendedor que cadastrou (preenchido no servidor por seller_create_client)
+  sellerId?: string;
+  sellerName?: string;
 }
 
 export interface VaccineBatch {
@@ -83,6 +86,9 @@ export interface PaymentRecord {
   // mas deixa de contar como recebimento.
   reversedAt?: string;
   reversalReason?: string;
+  // Recebimento informado por vendedor no fechamento da venda (seller_create_sale)
+  sellerId?: string;
+  sellerName?: string;
 }
 
 export interface Sale {
@@ -111,6 +117,10 @@ export interface Sale {
   commissionerName?: string;
   commissionRatePerUnit?: number;
   commissionTotal?: number;
+
+  // Vendedor que lançou a venda (preenchido no servidor por seller_create_sale)
+  sellerId?: string;
+  sellerName?: string;
 }
 
 export interface Commissioner {
@@ -177,6 +187,9 @@ export interface FinancialTransaction {
   // Estorno de entrada de venda cancelada: mantida no histórico, fora dos totais.
   reversedAt?: string;
   reversalReason?: string;
+  // Entrada informada por vendedor no fechamento da venda (seller_create_sale)
+  sellerId?: string;
+  sellerName?: string;
 }
 
 export type StockAdjustmentType = 'adicionar' | 'remover' | 'definir';
@@ -213,4 +226,78 @@ export interface ToastMessage {
   type: 'success' | 'error' | 'warning' | 'info';
   title: string;
   message: string;
+}
+
+// ============================================================================
+// ACESSO VENDEDOR
+// ============================================================================
+// Perfil de acesso vindo do servidor (public.seller_profiles), não do perfil salvo no jsonb.
+export type AccessRole = 'admin' | 'vendedor';
+
+export type SellerModule = 'inicio' | 'nova_venda' | 'minhas_vendas' | 'meus_clientes' | 'produtos';
+
+// Visões devolvidas por seller_get_data(): só os campos liberados ao vendedor
+// (sem custo, lucro, margem, lote, fornecedor ou comissão).
+export interface SellerClient {
+  id: string;
+  name: string;
+  storeName?: string | null;
+  phone?: string | null;
+  cnpj?: string | null;
+  city?: string | null;
+  address?: string | null;
+  notes?: string | null;
+  status: 'ativo' | 'inativo';
+  createdAt: string;
+  sellerName?: string | null; // preenchido quando o cliente foi cadastrado por um vendedor
+  isOwn?: boolean; // cadastrado pelo vendedor logado (só esses ele pode editar)
+}
+
+export interface SellerSaleItem {
+  vaccineName: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+}
+
+export interface SellerSale {
+  id: string;
+  saleNumber: string;
+  clientId: string;
+  clientName: string;
+  storeName?: string | null;
+  items: SellerSaleItem[];
+  totalQuantity: number;
+  totalAmount: number;
+  paymentMethod: PaymentMethod;
+  downPayment: number;
+  paidAmount: number;
+  remainingBalance: number;
+  installmentsCount: number;
+  dueDate: string;
+  notes?: string | null;
+  status: PaymentStatus;
+  createdAt: string;
+}
+
+export interface SellerPayment {
+  id: string;
+  saleId: string;
+  amount: number;
+  paymentDate: string;
+  paymentMethod: PaymentMethod;
+}
+
+export interface SellerProduct {
+  name: string;
+  manufacturer?: string | null;
+  available: number;
+}
+
+export interface SellerData {
+  seller: { id: string; name: string };
+  clients: SellerClient[];
+  sales: SellerSale[];
+  payments: SellerPayment[];
+  products: SellerProduct[];
 }

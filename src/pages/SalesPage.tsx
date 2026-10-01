@@ -188,6 +188,9 @@ export const SalesPage: React.FC<{ onOpenNewSale: () => void }> = ({ onOpenNewSa
                           {sale.storeName && (
                             <div className="text-[11px] text-slate-500">{sale.storeName}</div>
                           )}
+                          {sale.sellerName && (
+                            <div className="text-[10px] font-semibold text-indigo-600">Vendedor: {sale.sellerName}</div>
+                          )}
                         </td>
 
                         {/* Items preview */}

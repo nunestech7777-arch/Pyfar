@@ -1,6 +1,6 @@
 # SYSTEM CONTEXT
 
-Last updated: 2026-09-28 (added Manual Stock Adjustment / stockAdjustments; refactored Reports into Visão Geral/Produtos/Lotes/Vendas/A Receber)
+Last updated: 2026-10-01 (added Acesso Vendedor: seller_profiles + seller_* RPCs, SellerLayout, versioned user_data sync)
 
 > Read this file before exploring the repository.
 > Use it as the primary project map.
@@ -41,7 +41,8 @@ The primary user is the wholesale manager/admin (**Hassan** — `hassan@unofar.c
 - React Context API (`AppContext.tsx`) as single state coordinator.
 - Supabase (`@supabase/supabase-js`): Auth (email/senha) + tabela `public.user_data` (uma linha por usuário, cada coleção em `jsonb`, RLS por `auth.uid()`). Acesso via `cloudStorage` em `src/services/cloudStorage.ts`; salvamento automático com debounce de 600 ms a cada mudança de estado.
 - Contas novas começam **vazias** (sem seed). `src/data/initialData.ts` só fornece os defaults do perfil (`initialUser`).
-- Env: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` em `.env` (ver `.env.example`). Schema em `supabase/migrations/001_user_data.sql` + `002_stock_adjustments.sql` (coluna `stock_adjustments`).
+- Env: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` em `.env` (ver `.env.example`). Schema em `supabase/migrations/001_user_data.sql` + `002_stock_adjustments.sql` (coluna `stock_adjustments`) + `003_seller_access.sql` (vendedores, coluna `version`).
+- **Gravação versionada (admin)**: `user_data.version` é incrementada por trigger. `cloudStorage.save` grava com `eq('version', esperado)`; se um vendedor gravou antes (conflito), `AppContext` recarrega e faz merge de 3 vias (`src/utils/syncMerge.ts`: base/local/remoto por `id`; saldo de lote soma os dois deltas). O admin também verifica a versão a cada 20 s e ao focar a aba, trazendo vendas/clientes dos vendedores.
 
 **Linter & Tooling:**
 - Oxlint (`oxlint`)
@@ -58,10 +59,12 @@ src/
 ├── types/
 │   └── index.ts                     # Core TypeScript interfaces, unions and domain models
 ├── context/
-│   └── AppContext.tsx               # Primary global state coordinator (Sales, Stock, Finance, Commissions)
+│   ├── AppContext.tsx               # Primary global state coordinator (Sales, Stock, Finance, Commissions) + accessRole
+│   └── SellerContext.tsx            # Seller area state (data from seller_get_data, writes via seller_* RPCs)
 ├── services/
 │   ├── supabase.ts                  # Supabase client (reads VITE_ env vars)
-│   └── cloudStorage.ts              # Load/save per-user data in public.user_data
+│   ├── cloudStorage.ts              # Load/save per-user data in public.user_data (versioned save)
+│   └── sellerApi.ts                 # Access role lookup + seller_* RPC wrappers (seller area only)
 ├── data/
 │   └── initialData.ts               # Demo data (not loaded); initialUser = profile defaults
 ├── utils/
@@ -88,6 +91,10 @@ src/
 │       ├── NewExpenseModal.tsx      # Manual operating expense entry modal
 │       ├── AdjustStockModal.tsx     # Manual stock adjustment modal (add/remove/set + reason + audit)
 │       └── ReceiptModal.tsx         # Official printable receipt modal
+├── components/seller/
+│   ├── SellerLayout.tsx             # Seller-only layout/sidebar (Início, Nova venda, Minhas vendas, Meus clientes, Produtos)
+│   └── SellerClientModal.tsx        # Seller client create/edit (basic fields only)
+├── pages/seller/                    # SellerHomePage, SellerNewSalePage, SellerSalesPage, SellerClientsPage, SellerProductsPage
 ├── pages/
 │   ├── DashboardPage.tsx            # Overview metrics, charts, quick actions
 │   ├── StockPage.tsx                # Inventory lot table and stock health
@@ -455,9 +462,11 @@ Click DRE Card or Indicator on FinancialPage
 
 ## 12. SECURITY & ACCESS MODEL
 
-- **Authentication**: Supabase Auth (`supabase.auth.signInWithPassword`) via `AppContext.login(email, password)`; sessão restaurada no carregamento (`isLoadingSession`). Cadastro público desativado no painel do Supabase; contas são criadas pelo admin. Conta principal: `juniortg@gmail.com`.
-- **Data isolation**: RLS em `public.user_data` (`auth.uid() = user_id`).
-- **Role Model**: `User.role` (`admin` | `operador`).
+- **Authentication**: Supabase Auth (`supabase.auth.signInWithPassword`) via `AppContext.login(email, password)`; sessão restaurada no carregamento (`isLoadingSession`). Cadastro público desativado no painel do Supabase; contas são criadas pelo admin. Conta principal: `hassan.sistema@gmail.com`.
+- **Data isolation**: RLS em `public.user_data` (`auth.uid() = user_id` **e** o usuário não é vendedor).
+- **Role Model (Acesso Vendedor, migration 003)**: o perfil de acesso vem do servidor, não do jsonb: quem tem linha em `public.seller_profiles` (`user_id`, `owner_id` = admin, `name`, `active`) é **vendedor**; quem não tem é **admin** da própria conta. `AppContext.accessRole` (`'admin' | 'vendedor'`) decide o layout em `App.tsx`; `User.role` do perfil jsonb não é usado para permissão. `seller_profiles` é só leitura pelo app (sem policies de escrita) — vendedores são criados/desativados pelo SQL Editor (`supabase/sellers/*.sql`).
+- **Vendedor nunca lê `user_data`**: tudo passa por funções `SECURITY DEFINER` que identificam o vendedor por `auth.uid()`: `seller_get_data()` (vendas com `sellerId` = ele; clientes da empresa — sem `sellerId` — e os dele, nunca os de outros vendedores (migration 004), pagamentos dessas vendas, produtos agregados por nome com quantidade vendável — sem custo, lucro, lote, fornecedor, validade, comissão), `seller_create_client`, `seller_update_client` (só campos básicos dos clientes dele), `seller_create_sale` (aceita cliente da empresa ou dele; reaplica as regras de `addSale` no servidor: lotes não vencidos, validade mais próxima primeiro; entrada no caixa; recibo; comissão). Vendedor não cancela, exclui nem edita venda, não ajusta estoque. `Sale.sellerId/sellerName` e `Client.sellerId/sellerName` marcam o vínculo.
+- **Mudanças nas regras de venda (`addSale`) precisam ser replicadas em `seller_create_sale`** (migration 003) — são dois caminhos de gravação.
 - **Data Protection**: Client-side sanitized forms; non-destructive validation preventing negative quantities or payments exceeding remaining balance.
 - **Stock Adjustment Auditability**: `adjustStock` never writes `currentQuantity` from raw form input — it always recomputes previous/new quantity and rejects invalid states (negative result, non-integer, removal exceeding stock, missing motivo). Every accepted adjustment is appended to `stockAdjustments`, which is never mutated or deleted by the UI. Same RLS as the rest of `user_data` protects it (no separate table/policy needed).
 
@@ -477,9 +486,10 @@ Click DRE Card or Indicator on FinancialPage
 
 ## 14. KNOWN RISKS / TECHNICAL DEBT
 
+0. **Acesso Vendedor depende da migration 003** e de o vendedor ser vinculado em `seller_profiles`. Sem a migration, o app funciona só como admin (fallback). Criação de usuários vendedores ainda não tem tela (Supabase Dashboard + SQL).
 1. **Single-row jsonb storage**: Todos os dados da conta ficam em uma linha e são regravados inteiros a cada alteração. Com milhares de registros, migrar para tabelas relacionais (sales, batches, etc.). Não há controle de concorrência entre abas/dispositivos abertos ao mesmo tempo (a última gravação vence).
 2. **InMemory Filtering**: Filtering and calculations are performed in-memory on React render. For larger datasets, indexed queries or backend views will be required.
-3. **`User.role` is not enforced anywhere in the UI**: the field exists (`admin` | `operador`) but no page or action currently checks it — the app assumes a single trusted operator per account. Any future "who can do X" requirement (e.g., restricting stock adjustments to admins) needs this gate to be built from scratch, consistently, across all sensitive actions — not bolted onto a single feature.
+3. **`User.role` (jsonb profile) is not a permission**: permissions come from `seller_profiles` (server) via `accessRole`. Inside the admin account there is still no finer-grained role (e.g., an "operador" with fewer rights).
 
 ---
 

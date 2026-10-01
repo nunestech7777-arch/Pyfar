@@ -50,6 +50,7 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
   const { 
     financialTransactions, 
     deleteFinancialTransaction, 
+    deletePaymentReceipt,
     sales, 
     commissions, 
     payCommission,
@@ -506,15 +507,17 @@ export const FinancialPage: React.FC<{ onOpenNewExpense: () => void }> = ({ onOp
                             </span>
                           </td>
                           <td className="p-3.5 text-center">
-                            {!tx.isAutomatic && (
+                            {(!tx.isAutomatic || (tx.category === 'recebimento_parcela' && !reversed)) && (
                               <button
                                 onClick={() => {
-                                  if (confirm('Deseja excluir este lançamento manual?')) {
-                                    deleteFinancialTransaction(tx.id);
+                                  if (!tx.isAutomatic) {
+                                    if (confirm('Deseja excluir este lançamento manual?')) deleteFinancialTransaction(tx.id);
+                                  } else if (confirm('Excluir este recebimento? O valor volta para o saldo a receber da venda.')) {
+                                    deletePaymentReceipt(tx.id);
                                   }
                                 }}
                                 className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                                title="Excluir lançamento manual"
+                                title={tx.isAutomatic ? 'Excluir recebimento (devolve o saldo à venda)' : 'Excluir lançamento manual'}
                               >
                                 <Trash2 className="w-4 h-4" />
                               </button>

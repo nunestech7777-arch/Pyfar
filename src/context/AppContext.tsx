@@ -105,6 +105,7 @@ interface AppContextType {
     date: string;
   }) => void;
   deleteFinancialTransaction: (id: string) => void;
+  deletePaymentReceipt: (id: string) => void;
 
   // Receipt Modal Target
   viewingReceiptSale: Sale | null;
@@ -922,6 +923,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addToast('info', 'Lançamento Removido', 'Registro financeiro excluído.');
   };
 
+  // Exclui um recebimento de parcela lançado por engano: remove o lançamento e o registro de
+  // pagamento e devolve o valor ao saldo da venda (e recalcula a comissão liberada).
+  const deletePaymentReceipt = (id: string) => {
+    const tx = financialTransactions.find(f => f.id === id);
+    if (!tx || tx.type !== 'entrada' || tx.category !== 'recebimento_parcela' || !tx.referenceId) {
+      addToast('error', 'Erro', 'Este lançamento não é um recebimento de parcela.');
+      return;
+    }
+    const sale = sales.find(s => s.id === tx.referenceId);
+    const payment = payments.find(p => p.saleId === tx.referenceId && p.amount === tx.amount && p.paymentDate === tx.date && !p.reversedAt);
+
+    setFinancialTransactionsState(prev => prev.filter(f => f.id !== id));
+    if (payment) setPaymentsState(prev => prev.filter(p => p.id !== payment.id));
+
+    if (sale && !tx.reversedAt) {
+      const newPaid = Math.max(0, sale.paidAmount - tx.amount);
+      const newRemaining = Math.max(0, sale.totalAmount - newPaid);
+      let newStatus: Sale['status'] = 'pendente';
+      if (newRemaining <= 0) newStatus = 'pago';
+      else if (getDaysOverdue(sale.dueDate) > 0) newStatus = 'atrasado';
+      else if (newPaid > 0) newStatus = 'parcialmente_pago';
+
+      setSalesState(prev => prev.map(s => s.id === sale.id
+        ? { ...s, paidAmount: newPaid, remainingBalance: newRemaining, status: newStatus }
+        : s));
+
+      setCommissionsState(prev => prev.map(c => {
+        if (c.saleId !== sale.id || c.status === 'cancelada') return c;
+        const ratio = sale.totalAmount > 0 ? newPaid / sale.totalAmount : 0;
+        const newReleased = Number((c.totalCommission * ratio).toFixed(2));
+        let commStatus: CommissionEntry['status'] = 'pendente';
+        if (newReleased >= c.totalCommission) commStatus = c.paidCommission >= c.totalCommission ? 'paga' : 'liberada';
+        else if (newReleased > 0) commStatus = 'parcialmente_liberada';
+        return { ...c, salePaidAmount: newPaid, releasedCommission: newReleased, status: commStatus, lastUpdated: new Date().toISOString() };
+      }));
+    }
+
+    addToast('info', 'Recebimento Excluído', `Pagamento de R$ ${tx.amount.toFixed(2)} removido e saldo da venda restaurado.`);
+  };
+
   // Zera todos os dados operacionais da conta (o perfil é mantido)
   const resetAllData = () => {
     setClientsState([]);
@@ -972,6 +1013,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         financialTransactions,
         addManualExpense,
         deleteFinancialTransaction,
+        deletePaymentReceipt,
         viewingReceiptSale,
         setViewingReceiptSale,
         toasts,
